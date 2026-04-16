@@ -1,0 +1,53 @@
+name: yt-dlp upstream check
+
+on:
+  schedule:
+    - cron: '0 9 * * *'  # daily at 9am UTC
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Check if fork is behind upstream
+        id: compare
+        run: |
+          RESPONSE=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/feelixs/yt-dlp/compare/master...yt-dlp:master")
+          BEHIND=$(echo "$RESPONSE" | jq '.ahead_by')
+          echo "behind_by=$BEHIND" >> "$GITHUB_OUTPUT"
+          echo "Fork is behind upstream by $BEHIND commit(s)"
+
+      - name: Open issue if behind
+        if: steps.compare.outputs.behind_by != '0'
+        uses: actions/github-script@v7
+        env:
+          BEHIND_BY: ${{ steps.compare.outputs.behind_by }}
+        with:
+          script: |
+            const behind = parseInt(process.env.BEHIND_BY, 10);
+            const title = `yt-dlp fork is ${behind} commit(s) behind upstream`;
+
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'yt-dlp-sync',
+            });
+
+            if (issues.length > 0) {
+              console.log('Issue already open, skipping.');
+              return;
+            }
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body: `The [feelixs/yt-dlp](https://github.com/feelixs/yt-dlp) fork is **${behind} commit(s)** behind [yt-dlp/yt-dlp:master](https://github.com/yt-dlp/yt-dlp).\n\n[View diff](https://github.com/feelixs/yt-dlp/compare/master...yt-dlp:yt-dlp:master)`,
+              labels: ['yt-dlp-sync'],
+            });

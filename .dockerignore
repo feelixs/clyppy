@@ -1,0 +1,11 @@
+# Don't copy these into the Docker image
+data/
+*.pkl
+guild_settings.db
+cookies/
+__pycache__/
+*.pyc
+.git/
+.github/
+*.log
+*.db-journal

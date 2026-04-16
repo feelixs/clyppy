@@ -1,0 +1,69 @@
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+
+env:
+  DISCORD_TOKEN: ${{secrets.TEST_BOT_TOKEN}}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # --- Backend setup and test ---
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Write Dockerfile
+        run: |
+          cat > Dockerfile <<'EOF'
+          FROM python:3.12.6-slim
+          WORKDIR /app
+          COPY . /app
+
+          ARG DISCORD_TOKEN
+          ENV CLYPP_TOKEN=${DISCORD_TOKEN}
+          ENV CONTRIB_INSTANCE=1
+
+          RUN apt-get -yq update && apt-get install -y git
+          RUN pip3 install --no-cache-dir -r requirements.txt
+          RUN apt-get install -yq ffmpeg
+
+          CMD ["python3", "main.py"]
+          EOF
+
+      # just run the docker container to make sure it builds correctly, don't test the actual bot functionality
+      - name: Build Docker image
+        run: |
+          docker build --build-arg DISCORD_TOKEN="${{secrets.TEST_BOT_TOKEN}}" -t test-container .
+
+      - name: Run Docker container
+        run: |
+          docker run -d --name test-bot test-container
+          sleep 5
+
+      - name: Check container status
+        run: |
+          if docker ps -a --filter "name=test-bot" --format "{{.Status}}" | grep -q "Up"; then
+            echo "✓ Container is running"
+            docker logs test-bot
+          else
+            echo "✗ Container failed to start or exited"
+            docker logs test-bot
+            exit 1
+          fi
+
+      - name: Cleanup container
+        if: always()
+        run: |
+          docker stop test-bot || true
+          docker rm test-bot || true
