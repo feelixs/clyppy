@@ -2065,6 +2065,29 @@ class Base(Extension):
         except Exception as e:
             self.logger.info(f"Failed to post servers to botlist.me: {type(e).__name__}: {str(e)}")
 
+        dft = os.getenv('DISCORDFORGE_TOKEN')
+        try:
+            if not dft:
+                self.logger.info("DISCORDFORGE_TOKEN env var unset, skipping stats post")
+            else:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                            url="https://discordforge.org/api/bots/stats",
+                            json={
+                                'server_count': num,
+                                'shard_count': self.bot.total_shards,
+                                'user_count': total_users,
+                            },
+                            headers={
+                                'Authorization': dft,
+                                'Content-Type': 'application/json',
+                            }
+                    ) as resp:
+                        r = await resp.text()
+                        self.logger.info(f"Successfully posted servers to discordforge.org - response: {r}")
+        except Exception as e:
+            self.logger.info(f"Failed to post servers to discordforge.org: {type(e).__name__}: {str(e)}")
+
         dlt = os.getenv('DISCORDBOTLIST_TOKEN')
         try:
             if not dlt:

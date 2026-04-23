@@ -684,7 +684,7 @@ class AutoEmbedder:
 
                 # send message
                 # Check if it's a SlashContext (or MinimalContext with send method)
-                delete_message = self.bot.guild_settings.get_auto_delete(respond_to.guild.id)
+                delete_message = self.bot.guild_settings.get_auto_delete(guild.id)
                 if isinstance(respond_to, SlashContext) or (hasattr(respond_to, 'send') and not hasattr(respond_to, 'reply')):
                     # slash command
                     if uploading_to_discord:
