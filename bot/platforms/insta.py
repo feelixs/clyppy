@@ -1,11 +1,86 @@
 import re
 import os
+import asyncio
 import aiohttp
 import aiofiles
 from bot.classes import BaseClip, BaseMisc, get_video_details, is_discord_compatible
-from bot.errors import VideoTooLong, NoDuration
+from bot.errors import VideoTooLong, NoDuration, RemoteTimeoutError
 from bot.types import DownloadResponse, LocalFileInfo
-from typing import Optional
+from typing import Optional, Tuple
+
+# Ordered list of Instagram fixer providers we use to resolve a shortcode to
+# a direct Instagram CDN mp4 URL. Each provider exposes the same shape:
+#   GET https://{host}/videos/{shortcode}/1
+#     -> 302 with Location: https://scontent.cdninstagram.com/.../X.mp4
+# Probed in order; first one that 302s to an mp4 wins. Add new hosts here as
+# we discover them. Order = preference (fastest/most-reliable first).
+_INSTA_PROVIDERS = (
+    "kkinstagram.com",
+    "eeinstagram.com",
+)
+_DISCORD_UA = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)"
+
+
+async def _resolve_via_providers(
+    shortcode: str,
+    logger,
+    session: aiohttp.ClientSession,
+    per_provider_timeout: float = 4.0,
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Try each provider until one returns a 302 to an mp4.
+
+    Returns (provider_url, cdn_url, content_status) where content_status is:
+      - "ok"       — got a usable mp4 CDN URL (cdn_url is set)
+      - "no_video" — provider says the post has no video (don't fall back)
+      - "exhausted" — all providers errored/timed out (cdn_url is None)
+    """
+    last_error_status = None
+    for host in _INSTA_PROVIDERS:
+        provider_url = f"https://{host}/videos/{shortcode}/1"
+        try:
+            async with session.get(
+                provider_url,
+                headers={"User-Agent": _DISCORD_UA},
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=per_provider_timeout),
+            ) as response:
+                if response.status not in (301, 302, 307, 308):
+                    last_error_status = response.status
+                    logger.warning(
+                        f"insta provider {host} returned {response.status} for {shortcode}"
+                    )
+                    continue
+
+                cdn_url = response.headers.get("Location")
+                if not cdn_url:
+                    logger.warning(f"insta provider {host} 3xx with no Location for {shortcode}")
+                    continue
+
+                # Image-only posts redirect to a .jpg. That's a content fact, not
+                # a provider failure — falling back to another provider won't help.
+                cdn_path = cdn_url.split("?", 1)[0].lower()
+                if not cdn_path.endswith(".mp4"):
+                    logger.info(
+                        f"insta provider {host} redirected to non-mp4 ({cdn_path[-60:]}) "
+                        f"— post has no video"
+                    )
+                    return provider_url, None, "no_video"
+
+                logger.info(f"insta provider {host} resolved {shortcode} (status {response.status})")
+                return provider_url, cdn_url, "ok"
+
+        except asyncio.TimeoutError:
+            logger.warning(f"insta provider {host} timed out for {shortcode}")
+            continue
+        except Exception as e:
+            logger.warning(f"insta provider {host} errored for {shortcode}: {e}")
+            continue
+
+    logger.error(
+        f"insta: all {len(_INSTA_PROVIDERS)} providers failed for {shortcode} "
+        f"(last upstream status: {last_error_status})"
+    )
+    return None, None, "exhausted"
 
 
 class InstagramMisc(BaseMisc):
@@ -62,17 +137,34 @@ class InstagramClip(BaseClip):
 
     async def download(self, filename=None, dlp_format='best/bv*+ba', can_send_files=False, cookies=True, extra_opts=None) -> DownloadResponse:
         """
-        Create a redirect-based embed for Instagram using eeinstagram.com.
+        Create a redirect-based embed for Instagram.
 
-        We point `og:video` at `/videos/{shortcode}/1`, which 302s to the
-        Instagram CDN mp4. Using `/reel/{shortcode}` instead would return
+        We point `og:video` at a fixer's `/videos/{shortcode}/1`, which 302s to
+        the Instagram CDN mp4. Using `/reel/{shortcode}` instead would return
         HTML (not a video), and Discord refuses to embed that as og:video.
-        """
-        eeinstagram_url = f"https://eeinstagram.com/videos/{self._shortcode}/1"
-        self.logger.info(f"({self.id}) Creating redirect embed via eeinstagram: {eeinstagram_url}")
 
+        Probes the provider list and uses the first one that successfully
+        resolves the shortcode — so a single provider going down (eeinstagram
+        intermittent 500s, etc.) doesn't take Instagram embeds offline.
+        """
+        async with aiohttp.ClientSession() as session:
+            provider_url, cdn_url, status = await _resolve_via_providers(
+                self._shortcode, self.logger, session, per_provider_timeout=3.0
+            )
+
+        if status == "no_video":
+            self.logger.error(f"({self.id}) Instagram post has no video — bailing")
+            raise NoDuration
+
+        if status != "ok" or not provider_url:
+            # All fixer services are down/erroring. Distinct from "post has no video"
+            # so the user gets a "try again later" message rather than "not a video."
+            self.logger.error(f"({self.id}) all Instagram providers failed for embed")
+            raise RemoteTimeoutError
+
+        self.logger.info(f"({self.id}) Creating redirect embed via {provider_url}")
         return DownloadResponse(
-            remote_url=eeinstagram_url,
+            remote_url=provider_url,
             local_file_path=None,
             duration=self.duration,
             width=0,  # Unknown for redirect-based embeds
@@ -85,40 +177,30 @@ class InstagramClip(BaseClip):
 
     async def dl_download(self, filename=None, dlp_format='best/bv*+ba', can_send_files=False, cookies=False, extra_opts=None) -> Optional[LocalFileInfo]:
         """
-        Download Instagram video via eeinstagram.
+        Download Instagram video bytes through the provider chain.
 
-        eeinstagram exposes `/videos/{shortcode}/{n}` which 302s to the
-        Instagram CDN mp4. Only GET is allowed (HEAD returns 405).
+        Each provider exposes `/videos/{shortcode}/{n}` which 302s to the
+        Instagram CDN mp4. We probe providers in order and download from the
+        first one that resolves successfully.
         """
         if os.path.isfile(filename):
             self.logger.info("file already exists! returning...")
             return get_video_details(filename)
 
-        video_endpoint = f"https://eeinstagram.com/videos/{self._shortcode}/1"
-        discord_ua = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)"
-
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(video_endpoint, headers={"User-Agent": discord_ua}, allow_redirects=False) as response:
-                    if response.status not in (301, 302, 307, 308):
-                        self.logger.error(f"eeinstagram /videos did not redirect, got status {response.status}")
-                        return None
+                _, cdn_url, status = await _resolve_via_providers(
+                    self._shortcode, self.logger, session, per_provider_timeout=5.0
+                )
 
-                    cdn_url = response.headers.get("Location")
-                    if not cdn_url:
-                        self.logger.error("eeinstagram /videos redirect had no Location header")
-                        return None
-
-                # eeinstagram returns a 302 even for posts with no video — it points at a .jpg on the
-                # image CDN (scontent.../t51.71878-15/...jpg). Bail before we save a JPEG as .mp4.
-                cdn_path = cdn_url.split("?", 1)[0].lower()
-                if not cdn_path.endswith(".mp4"):
-                    self.logger.error(f"eeinstagram /videos redirect is not an mp4 ({cdn_path[-60:]}) — post has no video")
+                if status == "no_video":
+                    return None
+                if status != "ok" or not cdn_url:
                     return None
 
-                self.logger.info(f"({self.id}) Got CDN URL from eeinstagram: {cdn_url[:100]}...")
+                self.logger.info(f"({self.id}) Got CDN URL: {cdn_url[:100]}...")
 
-                async with session.get(cdn_url, headers={"User-Agent": discord_ua}) as response:
+                async with session.get(cdn_url, headers={"User-Agent": _DISCORD_UA}) as response:
                     if response.status != 200:
                         self.logger.error(f"Failed to download from CDN, status {response.status}")
                         return None
@@ -139,5 +221,5 @@ class InstagramClip(BaseClip):
             return None
 
         except Exception as e:
-            self.logger.error(f"eeinstagram download error: {str(e)}")
+            self.logger.error(f"insta download error: {str(e)}")
             return None

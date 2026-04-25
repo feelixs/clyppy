@@ -20,7 +20,7 @@ from bot.env import (EMBED_TXT_COMMAND, create_nexus_comps, APPUSE_LOG_WEBHOOK, 
                      EMBED_TOTAL_MAX_LENGTH, EMBED_W_TOKEN_MAX_LEN, LOGGER_WEBHOOK, SUPPORT_SERVER_URL, VERSION,
                      CLYPPY_VOTE_URL, DL_SERVER_ID, YT_DLP_MAX_FILESIZE, MAX_FILE_SIZE_FOR_DISCORD, YT_DLP_USER_AGENT,
                      MAX_VIDEO_LEN_FOR_EXTEND, MIN_VIDEO_LEN_FOR_EXTEND, BUY_TOKENS_URL, AI_EXTEND_TOKENS_COST,
-                     GITHUB_URL, is_contrib_instance, log_api_bypass)
+                     GITHUB_URL, is_contrib_instance, log_api_bypass, vote_url, buy_tokens_url)
 from bot.errors import (NoDuration, UnknownError, UploadFailed, NoPermsToView, VideoTooLong, VideoLongerThanMaxLength,
                         IPBlockedError, VideoUnavailable, InvalidFileType, UnsupportedError, RemoteTimeoutError,
                         YtDlpForbiddenError, UrlUnparsable, VideoSaidUnavailable, DefinitelyNoDuration,
@@ -979,7 +979,7 @@ class BaseAutoEmbed:
             content=f"**You have `{tokens}` VIP tokens**\nUse your VIP tokens to embed longer videos!\n\n"
                     f"You can gain more by **voting** with `{pre}vote`",
             components=[
-                Button(style=ButtonStyle.LINK, label="Vote!", url=CLYPPY_VOTE_URL),
+                Button(style=ButtonStyle.LINK, label="Vote!", url=vote_url("vote_command")),
                 Button(style=ButtonStyle.LINK, label="View VIP Token History", url="https://clyppy.io/profile/tokens/history/")
             ]
         ))
@@ -1006,8 +1006,8 @@ class BaseAutoEmbed:
                f"- VIP tokens allow you to embed videos longer than the standard {MAX_VIDEO_LEN_SEC // 60} minutes!\n\n"
                f"You can get some free tokens by voting below, or purchasing them in bulk from our store `(づ๑•ᴗ•๑)づ♡`")
         asyncio.create_task(ctx.send(content=msg, components=[
-            Button(style=ButtonStyle(ButtonStyle.LINK), label="Vote!", url=CLYPPY_VOTE_URL),
-            Button(style=ButtonStyle(ButtonStyle.LINK), label="Buy in Bulk", url=BUY_TOKENS_URL)
+            Button(style=ButtonStyle(ButtonStyle.LINK), label="Vote!", url=vote_url("vote_command")),
+            Button(style=ButtonStyle(ButtonStyle.LINK), label="Buy in Bulk", url=buy_tokens_url("vote_command"))
         ]))
         asyncio.create_task(send_webhook(
             title=f'{"DM" if ctx.guild is None else ctx.guild.name} - {ctx.user.username} - {pre}vote called',

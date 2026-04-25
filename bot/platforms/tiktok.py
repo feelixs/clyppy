@@ -1,12 +1,78 @@
 import re
 import os
+import asyncio
 import aiohttp
 import aiofiles
 from aiohttp import ClientSession
 from bot.types import DownloadResponse, LocalFileInfo
-from bot.errors import VideoTooLong, NoDuration
+from bot.errors import VideoTooLong, NoDuration, RemoteTimeoutError
 from bot.classes import BaseClip, BaseMisc, get_video_details, is_discord_compatible
 from typing import Optional, Tuple
+
+# Ordered list of TikTok fixer providers we use to resolve a video_id to a
+# direct TikTok CDN mp4 URL. Each entry is (host, path_template_with_{vid}),
+# expected to 302 to https://*.tiktokcdn-*.com/.../X.mp4
+#
+# These two providers have INDEPENDENT backends (different scrapers + different
+# CDN response chains), so when one is throttled or its scraper breaks the
+# other usually keeps working. Probed in order; first 3xx wins.
+# Add new hosts here as we discover them.
+_TIKTOK_PROVIDERS = (
+    ("tnktok.com",     "/generate/video/{vid}.mp4"),     # backend A — fast, current default
+    ("www.tikwm.com",  "/video/media/play/{vid}.mp4"),   # backend B — independent fallback
+)
+_DISCORD_UA = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)"
+
+
+async def _resolve_via_providers(
+    video_id: str,
+    logger,
+    session: aiohttp.ClientSession,
+    per_provider_timeout: float = 4.0,
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Try each provider until one returns a 3xx redirect to a TikTok CDN URL.
+
+    Returns (provider_url, cdn_url, status) where status is:
+      - "ok"        — got a usable redirect (cdn_url is set)
+      - "exhausted" — all providers errored/timed out (cdn_url is None)
+    """
+    last_status = None
+    for host, path_template in _TIKTOK_PROVIDERS:
+        provider_url = f"https://{host}" + path_template.format(vid=video_id)
+        try:
+            async with session.get(
+                provider_url,
+                headers={"User-Agent": _DISCORD_UA},
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=per_provider_timeout),
+            ) as response:
+                if response.status not in (301, 302, 307, 308):
+                    last_status = response.status
+                    logger.warning(
+                        f"tiktok provider {host} returned {response.status} for {video_id}"
+                    )
+                    continue
+
+                cdn_url = response.headers.get("Location")
+                if not cdn_url:
+                    logger.warning(f"tiktok provider {host} 3xx with no Location for {video_id}")
+                    continue
+
+                logger.info(f"tiktok provider {host} resolved {video_id} (status {response.status})")
+                return provider_url, cdn_url, "ok"
+
+        except asyncio.TimeoutError:
+            logger.warning(f"tiktok provider {host} timed out for {video_id}")
+            continue
+        except Exception as e:
+            logger.warning(f"tiktok provider {host} errored for {video_id}: {e}")
+            continue
+
+    logger.error(
+        f"tiktok: all {len(_TIKTOK_PROVIDERS)} providers failed for {video_id} "
+        f"(last upstream status: {last_status})"
+    )
+    return None, None, "exhausted"
 
 
 class TikTokMisc(BaseMisc):
@@ -96,12 +162,25 @@ class TikTokClip(BaseClip):
         return f"https://clyppy.io/e/{self.clyppy_id}"
 
     async def download(self, filename=None, dlp_format='best/bv*+ba', can_send_files=False, cookies=False, extra_opts=None) -> DownloadResponse:
-        # Build the tnktok offload redirect URL (302s to TikTok CDN)
-        tnktok_url = f"https://offload.tnktok.com/generate/video/{self._video_id}.mp4"
-        self.logger.info(f"({self.id}) Creating redirect embed via tnktok: {tnktok_url}")
+        """
+        Create a redirect-based embed for TikTok.
 
+        Probes the provider list and uses the first one that successfully
+        resolves the video_id — so a single provider being throttled or having
+        its scraper broken doesn't take TikTok embeds offline.
+        """
+        async with aiohttp.ClientSession() as session:
+            provider_url, _, status = await _resolve_via_providers(
+                self._video_id, self.logger, session, per_provider_timeout=3.0
+            )
+
+        if status != "ok" or not provider_url:
+            self.logger.error(f"({self.id}) all TikTok providers failed for embed")
+            raise RemoteTimeoutError
+
+        self.logger.info(f"({self.id}) Creating redirect embed via {provider_url}")
         return DownloadResponse(
-            remote_url=tnktok_url,
+            remote_url=provider_url,
             local_file_path=None,
             duration=self.duration,
             width=0,
@@ -114,24 +193,29 @@ class TikTokClip(BaseClip):
 
     async def dl_download(self, filename=None, dlp_format='best/bv*+ba', can_send_files=False, cookies=False, extra_opts=None) -> Optional[LocalFileInfo]:
         """
-        Download TikTok video via tnktok.
+        Download TikTok video bytes through the provider chain.
 
-        Uses the tnktok offload URL to download the video directly.
+        Each provider 302s to a TikTok CDN mp4. We probe in order and download
+        from the first one that resolves successfully.
         """
         if os.path.isfile(filename):
             self.logger.info("file already exists! returning...")
             return get_video_details(filename)
 
-        cdn_url = f"https://offload.tnktok.com/generate/video/{self._video_id}.mp4"
-        discord_ua = "Mozilla/5.0 (compatible; Discordbot/2.0; +https://discordapp.com)"
-
         try:
             async with aiohttp.ClientSession() as session:
-                self.logger.info(f"({self.id}) Downloading from tnktok CDN: {cdn_url}")
+                _, cdn_url, status = await _resolve_via_providers(
+                    self._video_id, self.logger, session, per_provider_timeout=5.0
+                )
 
-                async with session.get(cdn_url, headers={"User-Agent": discord_ua}) as response:
+                if status != "ok" or not cdn_url:
+                    return None
+
+                self.logger.info(f"({self.id}) Got CDN URL: {cdn_url[:100]}...")
+
+                async with session.get(cdn_url, headers={"User-Agent": _DISCORD_UA}) as response:
                     if response.status != 200:
-                        self.logger.error(f"Failed to download from tnktok CDN, status {response.status}")
+                        self.logger.error(f"Failed to download from CDN, status {response.status}")
                         return None
 
                     async with aiofiles.open(filename, 'wb') as f:
@@ -150,5 +234,5 @@ class TikTokClip(BaseClip):
             return None
 
         except Exception as e:
-            self.logger.error(f"tnktok download error: {str(e)}")
+            self.logger.error(f"tiktok download error: {str(e)}")
             return None

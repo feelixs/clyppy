@@ -2,7 +2,7 @@ import logging
 from interactions import Extension, Task, IntervalTrigger, listen, Button, ButtonStyle
 from interactions.api.events import Startup
 from bot.io.io import get_pending_backup_warnings, mark_backup_warned
-from bot.env import BUY_TOKENS_URL, CLYPPY_VOTE_URL, CLYPPYBOT_ID
+from bot.env import buy_tokens_url, vote_url, CLYPPYBOT_ID
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +72,8 @@ class BackupNotifier(Extension):
                         await dm.send(
                             content=msg,
                             components=[
-                                Button(style=ButtonStyle.LINK, label="Free Tokens (Vote)", url=CLYPPY_VOTE_URL),
-                                Button(style=ButtonStyle.LINK, label="Buy Tokens", url=BUY_TOKENS_URL),
+                                Button(style=ButtonStyle.LINK, label="Free Tokens (Vote)", url=vote_url("low_token_dm")),
+                                Button(style=ButtonStyle.LINK, label="Buy Tokens", url=buy_tokens_url("low_token_dm")),
                             ]
                         )
                         acknowledged_ids.append(backup_id)

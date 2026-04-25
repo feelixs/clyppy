@@ -2,7 +2,7 @@ import logging
 from interactions import Extension, Task, IntervalTrigger, listen, Button, ButtonStyle
 from interactions.api.events import Startup
 from bot.io.io import get_low_token_users, mark_low_token_notified
-from bot.env import CLYPPYBOT_ID
+from bot.env import CLYPPYBOT_ID, vote_url, buy_tokens_url
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +45,8 @@ class LowTokenNotifier(Extension):
                                 f"consider voting or buying more in bulk."
                             ),
                             components=[
-                                Button(style=ButtonStyle.LINK, label="Vote for Tokens", url="https://clyppy.io/profile/tokens/#vote"),
-                                Button(style=ButtonStyle.LINK, label="Buy Tokens", url="https://clyppy.io/profile/tokens/"),
+                                Button(style=ButtonStyle.LINK, label="Vote for Tokens", url=vote_url("low_token_dm")),
+                                Button(style=ButtonStyle.LINK, label="Buy Tokens", url=buy_tokens_url("low_token_dm")),
                             ]
                         )
                         notified_ids.append(user_id)

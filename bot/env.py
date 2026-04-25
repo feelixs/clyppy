@@ -37,7 +37,7 @@ EMBED_TXT_COMMAND = ".embed"
 LOGGER_WEBHOOK = os.getenv('LOG_WEBHOOK')
 APPUSE_LOG_WEBHOOK = os.getenv('APPUSE_WEBHOOK')
 
-VERSION = "2.2.1"
+VERSION = "2.2.2"
 CLYPPYIO_USER_AGENT = f"ClyppyBot/{VERSION}"
 
 AI_EXTEND_TOKENS_COST = 10
@@ -66,7 +66,7 @@ CLYPPY_SUPPORT_SERVER_ID = None if CONTRIB_INSTANCE else 1117149574730104872
 CLYPPY_VOTE_ROLE = None if CONTRIB_INSTANCE else 1337067081941647472
 VOTE_WEBHOOK_USERID = None if CONTRIB_INSTANCE else 1337076281040179240
 
-MONTHLY_WINNER_CHANNEL_ID = 1334730740763463691
+MONTHLY_WINNER_CHANNEL_ID = 1497641285279023164
 MONTHLY_WINNER_TOKENS = 50
 
 GITHUB_URL = "https://github.com/feelixs/clyppy"
@@ -79,4 +79,59 @@ DLIST_VOTE_LINK = "https://discordbotlist.com/bots/clyppy/upvote"
 BOTLISTME_VOTE_LINK = "https://botlist.me/bots/1111723928604381314/vote"
 CLYPPY_VOTE_URL = "https://clyppy.io/vote/"
 BUY_TOKENS_URL = "https://clyppy.io/profile/tokens"
+
+
+# Trigger labels — must match VoteLog.TRIGGER_CHOICES on the web side.
+# Pass the trigger that best describes WHY the user is being shown this link
+# so the web side can attribute the resulting vote in VoteLog.trigger.
+_VOTE_TRIGGERS = {
+    "unprompted",
+    "low_token_dm",
+    "post_vote_dm",
+    "vote_command",
+    "embed_button",
+    "weekend_2x_dm",
+    "unknown",
+}
+
+# Trigger labels for token PURCHASES — must match StripeTransaction.TRIGGER_CHOICES.
+# These overlap with vote triggers (low_token_dm, embed_button) so the same
+# DM context can drive both flows; treat them as separate vocabularies because
+# the "what drove this purchase?" question doesn't always line up with votes
+# (e.g. tokens_command, backup_command have no vote analogue).
+_BUY_TOKENS_TRIGGERS = {
+    "unprompted",
+    "low_token_dm",
+    "post_vote_dm",
+    "vote_command",
+    "embed_button",
+    "tokens_command",
+    "backup_command",
+    "unknown",
+}
+
+
+def vote_url(ref: str = "unknown") -> str:
+    """Build the canonical vote-page URL with a trigger ref attached.
+
+    The web vote redirect preserves ?ref=, the tokens page propagates it onto
+    each outbound vote-site URL (top.gg, etc.), and top.gg echoes it back via
+    its `query` field on the vote webhook — closing the attribution loop.
+    """
+    if ref not in _VOTE_TRIGGERS:
+        ref = "unknown"
+    return f"{CLYPPY_VOTE_URL}?ref={ref}"
+
+
+def buy_tokens_url(ref: str = "unknown") -> str:
+    """Build the canonical buy-tokens URL with a trigger ref attached.
+
+    The tokens page reads ?ref= from request.GET on render and stashes it in
+    the user's session. When they POST to create-stripe-checkout, the endpoint
+    pulls the stashed value, attaches it to Stripe checkout metadata, and the
+    Stripe payment-success webhook reads it back into StripeTransaction.trigger.
+    """
+    if ref not in _BUY_TOKENS_TRIGGERS:
+        ref = "unknown"
+    return f"{BUY_TOKENS_URL}?ref={ref}"
 

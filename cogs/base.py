@@ -1809,14 +1809,14 @@ class Base(Extension):
                 if len(winners) == 1:
                     w = winners[0]
                     description = (
-                        f"Congratulations to <@{w['user_id']}> for being the top voter of **{month_display}**!\n\n"
+                        f"Congratulations to **{w['username']}** for being the top voter of **{month_display}**!\n\n"
                         f"They cast **{winner_votes}** vote{'s' if winner_votes != 1 else ''} and have been awarded "
                         f"**{MONTHLY_WINNER_TOKENS} VIP tokens**!\n\n"
                         f"Vote this month to claim the title next time!"
                     )
                     title = f"Monthly Voting Champion - {month_display}"
                 else:
-                    winner_list = ", ".join(f"<@{w['user_id']}> ({w['username']})" for w in winners)
+                    winner_list = ", ".join(f"**{w['username']}**" for w in winners)
                     description = (
                         f"Congratulations to our top voters of **{month_display}**!\n"
                         f"{winner_list} — **{winner_votes}** vote{'s' if winner_votes != 1 else ''} each\n\n"
@@ -1914,34 +1914,49 @@ class Base(Extension):
                 "Type `/help` to see everything I can do."
             )
             welcome_sent = False
-            try:
-                # 1. Try system channel
-                channel = None
+            me = getattr(guild, 'me', None)
+
+            def _writable(c):
+                if isinstance(c, (GuildForum, GuildCategory)):
+                    return False
+                if not hasattr(c, 'send'):
+                    return False
+                if me is None:
+                    return True
                 try:
-                    sc = guild.system_channel
-                    if sc and not isinstance(sc, (GuildForum, GuildCategory)):
-                        channel = sc
+                    return Permissions.SEND_MESSAGES in c.permissions_for(me)
                 except Exception:
-                    pass
+                    return False
 
-                # 2. Fall back to first writable text channel by position
-                if channel is None:
-                    candidates = [
-                        c for c in guild.channels
-                        if not isinstance(c, (GuildForum, GuildCategory))
-                        and hasattr(c, 'send')
-                    ]
-                    candidates.sort(key=lambda c: getattr(c, 'position', 999))
-                    if candidates:
-                        channel = candidates[0]
+            # Prioritized list: system channel first (if writable), then every
+            # other writable text channel by position. We try them all so a
+            # single locked-down channel doesn't force a fall-through to the
+            # owner DM (which usually fails — Discord users have DMs off).
+            sc = getattr(guild, 'system_channel', None)
+            candidates = []
+            if sc is not None and _writable(sc):
+                candidates.append(sc)
+            others = [c for c in guild.channels if c is not sc and _writable(c)]
+            others.sort(key=lambda c: getattr(c, 'position', 999))
+            candidates.extend(others)
 
-                if channel:
-                    await channel.send(welcome_msg)
+            for ch in candidates:
+                try:
+                    await ch.send(welcome_msg)
                     welcome_sent = True
-                else:
-                    raise Exception("no suitable channel found")
-            except Exception as e:
-                self.logger.warning(f"Welcome msg failed in channel for {guild.name}: {e}, trying owner DM")
+                    break
+                except Exception as e:
+                    self.logger.debug(
+                        f"Welcome send failed in #{getattr(ch, 'name', '?')} "
+                        f"for {guild.name}: {e}"
+                    )
+                    continue
+
+            if not welcome_sent:
+                self.logger.warning(
+                    f"Welcome msg failed in all {len(candidates)} channels for "
+                    f"{guild.name}, trying owner DM"
+                )
                 try:
                     owner = await self.bot.fetch_user(guild.owner_id)
                     await owner.send(welcome_msg)

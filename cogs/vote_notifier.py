@@ -2,7 +2,7 @@ import logging
 from interactions import Extension, Task, IntervalTrigger, listen
 from interactions.api.events import Startup
 from bot.io.io import get_pending_vote_notifications, mark_votes_notified
-from bot.env import CLYPPY_VOTE_URL, CLYPPYBOT_ID
+from bot.env import vote_url, CLYPPYBOT_ID
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ async def _format_vote_dm(entry: dict, user, bot) -> str:
     lines += [
         "",
         "You can vote again in **12 hours**.",
-        f">>> {CLYPPY_VOTE_URL}",
+        f">>> {vote_url('post_vote_dm')}",
     ]
     return "\n".join(lines)
 
