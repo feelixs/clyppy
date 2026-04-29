@@ -1455,6 +1455,353 @@ class Base(Extension):
             quickembeds, on_error, embed_buttons, auto_delete, default_download_filetype, log=True,
         )
 
+    async def _apply_settings(self, ctx: SlashContext, target_guild_id: int, target_guild_name: str,
+                              target_channel_id: Optional[int], target_channel_name: Optional[str],
+                              quickembeds: Optional[str], on_error: Optional[str], embed_buttons: Optional[str],
+                              auto_delete: Optional[str], default_download_filetype: Optional[str], log: bool):
+        current_qe_platforms, qe_is_default = self.bot.guild_settings.get_quickembed_platforms(
+            target_guild_id, target_channel_id)
+        chosen_qe = current_qe_platforms
+        qe_scope = f"in **#{target_channel_name}**" if target_channel_id else "server-wide"
+
+        if quickembeds is not None:
+            if quickembeds.lower() == 'reset':
+                if target_channel_id is None:
+                    await ctx.send("Cannot reset server-wide settings. Use `quickembeds=none` to disable all platforms.")
+                    return
+                success = self.bot.guild_settings.delete_channel_quickembed_setting(target_guild_id, target_channel_id)
+                if success:
+                    await ctx.send(f"Channel override removed for **#{target_channel_name}**. Now using server-wide settings.")
+                else:
+                    await ctx.send("Error removing channel override.")
+                return
+
+            success, error_msg, valid_platforms = self.bot.guild_settings.set_quickembed_platforms(
+                target_guild_id, quickembeds, target_channel_id)
+            if not success:
+                await ctx.send(f"Error setting quickembeds: {error_msg}")
+                return
+            chosen_qe = valid_platforms
+            if log:
+                await log_guild_event(
+                    guild_id=target_guild_id,
+                    event_type='quickembeds_changed',
+                    data={'platforms': chosen_qe, 'channel_id': target_channel_id, 'user_id': ctx.author.id},
+                )
+
+        current_setting = self.bot.guild_settings.get_setting(target_guild_id)
+        current_on_error = POSSIBLE_ON_ERRORS[int(current_setting[1])]
+
+        on_error = on_error or current_on_error
+        if on_error not in POSSIBLE_ON_ERRORS:
+            await ctx.send(f"Option '{on_error}' not a valid **on_error** setting!\nMust be one of `{POSSIBLE_ON_ERRORS}`")
+            return
+
+        current_embed_setting: int = self.bot.guild_settings.get_embed_buttons(target_guild_id)
+        current_embed_setting: str = POSSIBLE_EMBED_BUTTONS[current_embed_setting]
+        embed_buttons = embed_buttons or current_embed_setting
+
+        if embed_buttons not in POSSIBLE_EMBED_BUTTONS:
+            await ctx.send(f"Option '{embed_buttons}' not a valid **embed_buttons** setting!\n"
+                           f"Must be one of `{POSSIBLE_EMBED_BUTTONS}`")
+            return
+
+        embed_idx = POSSIBLE_EMBED_BUTTONS.index(embed_buttons)
+        self.bot.guild_settings.set_embed_buttons(target_guild_id, embed_idx)
+
+        if auto_delete is None:
+            auto_delete = self.bot.guild_settings.get_auto_delete(target_guild_id)
+        else:
+            auto_delete = auto_delete.strip().lower()
+            if auto_delete not in ('true', 'false', 'embeds'):
+                await ctx.send(f"Option '{auto_delete}' not a valid **auto_delete** setting!\n"
+                               f"Must be one of `true`, `false`, `embeds`")
+                return
+            self.bot.guild_settings.set_auto_delete(target_guild_id, auto_delete)
+
+        if default_download_filetype is None:
+            default_download_filetype = self.bot.guild_settings.get_default_download_filetype(target_guild_id)
+        else:
+            default_download_filetype = default_download_filetype.strip().lower().lstrip('.')
+            if default_download_filetype not in SUPPORTED_FORMATS:
+                await ctx.send(f"Option '{default_download_filetype}' not a valid **default_download_filetype** setting!\n"
+                               f"Must be one of `{', '.join(SUPPORTED_FORMATS.keys())}`")
+                return
+            self.bot.guild_settings.set_default_download_filetype(target_guild_id, default_download_filetype)
+
+        from bot.db import VALID_QUICKEMBED_PLATFORMS
+        if not chosen_qe:
+            qe_display = "none"
+        elif set(chosen_qe) == set(VALID_QUICKEMBED_PLATFORMS):
+            qe_display = "all"
+        else:
+            qe_display = ', '.join(chosen_qe)
+
+        qe_scope_msg = f" ({qe_scope})" if quickembeds is not None else ""
+        await ctx.send(
+            f"Successfully changed settings for **{target_guild_name}**:\n\n"
+            f"**quickembeds**: {qe_display}{' (default)' if qe_is_default else ''}{qe_scope_msg}\n"
+            f"**on_error**: {on_error}\n"
+            f"**embed_buttons**: {embed_buttons}\n"
+            f"**auto_delete**: {auto_delete}\n"
+            f"**default_download_filetype**: {default_download_filetype}\n\n"
+        )
+        if log:
+            await send_webhook(
+                title=f'{target_guild_name} - /settings called',
+                load=f'user: {ctx.user.username}\n'
+                     "Successfully changed settings:\n\n"
+                     f"**quickembeds**: {qe_display}\n"
+                     f"**on_error**: {on_error}\n"
+                     f"**embed_buttons**: {embed_buttons}\n"
+                     f"**auto_delete**: {auto_delete}\n"
+                     f"**default_download_filetype**: {default_download_filetype}\n\n",
+                color=COLOR_GREEN,
+                url=APPUSE_LOG_WEBHOOK,
+                logger=self.logger
+            )
+
+    async def _send_settings_help(self, ctx: SlashContext, target_guild_id: int, target_guild_name: str,
+                                  prepend_admin: bool = False, log: bool = True):
+        cs = self.bot.guild_settings.get_setting_str(target_guild_id)
+        es = self.bot.guild_settings.get_embed_buttons(target_guild_id)
+        qe_platforms, qe_is_default = self.bot.guild_settings.get_quickembed_platforms(target_guild_id)
+        auto_delete = self.bot.guild_settings.get_auto_delete(target_guild_id)
+        default_download_filetype = self.bot.guild_settings.get_default_download_filetype(target_guild_id)
+        es = POSSIBLE_EMBED_BUTTONS[es]
+
+        # Format quickembed display
+        if not qe_platforms:
+            qe = "none"
+        elif 'all' in qe_platforms:
+            qe = "all"
+        else:
+            qe = ', '.join(qe_platforms)
+
+        # Use friendly platform names for display
+        valid_platforms_str = ', '.join(p.platform_name for p in self.bot.platform_list if not p.is_nsfw)
+
+        # Build channel overrides section
+        overrides = self.bot.guild_settings.list_channel_overrides(target_guild_id)
+        channel_overrides_section = ""
+        if overrides:
+            override_lines = []
+            for channel_id, setting in overrides:
+                try:
+                    channel_obj = self.bot.get_channel(channel_id)
+                    channel_name = f"**#{channel_obj.name}**" if channel_obj else f"channel `{channel_id}`"
+                    # Parse setting for display
+                    if setting == 'none':
+                        platforms = 'none'
+                    elif setting == 'all':
+                        platforms = 'all'
+                    else:
+                        platforms = ', '.join(setting.split(','))
+                    override_lines.append(f"  {channel_name}: {platforms}")
+                except Exception:
+                    pass
+            if override_lines:
+                channel_overrides_section = "\n\n**Channel Overrides:**\n" + "\n".join(override_lines)
+
+        about = (
+            '**Configurable Settings:**\n'
+            'Below are the settings you can configure using this command. Each setting name is in **bold** '
+            'followed by its available options.\n\n'
+            '**quickembeds** Configure which platforms Clyppy automatically embeds:\n'
+            ' - `all`: Enable for all platforms\n'
+            ' - `none`: Disable all quickembeds (use `/embed` command instead)\n'
+            ' - `reset`: Remove channel-specific override (use with `channel` parameter)\n'
+            f' - Comma-separated list: e.g., `Twitch,Kick,Medal`\n'
+            f' - Valid platforms: `None, All, {valid_platforms_str}, and more...`\n'
+            ' - Use `channel` parameter to apply to specific channel (blank = server-wide)\n\n'
+            '**on_error** Choose what Clyppy does when it encounters an error:\n'
+            ' - `info`: Respond to the message with the error.\n'
+            ' - `dm`: DM the message author about the error.\n\n'
+            '**embed_buttons** Choose which buttons Clyppy shows under embedded videos:\n'
+            ' - `none`: No buttons, just the video.\n'
+            ' - `view`: A button to the original clip.\n'
+            ' - `dl`: A button to download the original video file (on compatible clips).\n'
+            ' - `all`: Shows all available buttons.\n\n'
+            '**auto_delete** What Clyppy does with the parent message after embedding:\n'
+            ' - `true`: Delete the parent message after embedding.\n'
+            ' - `false`: Leave the parent message as-is.\n'
+            ' - `embeds`: Suppress embeds on the parent message (requires Manage Messages permission).\n\n'
+            '**default_download_filetype** Default output format for `/download` when no `file_ext` is given:\n'
+            f' - One of: `{", ".join(SUPPORTED_FORMATS.keys())}`\n\n'
+            f'**Current Settings:**\n**quickembeds** (server-wide): {qe}{" (default)" if qe_is_default else ""}'
+            f'{channel_overrides_section}\n{cs}\n**embed_buttons**: {es}\n'
+            f'**auto_delete**: {auto_delete}\n'
+            f'**default_download_filetype**: {default_download_filetype}\n\n'
+            f'Something missing? Please **[Suggest a Feature]({SUPPORT_SERVER_URL})**'
+        )
+
+        if prepend_admin:
+            about = "**ONLY MEMBERS WITH THE ADMINISTRATOR PERMISSIONS CAN EDIT SETTINGS**\n\n" + about
+
+        tutorial_embed = Embed(title=f"CLYPPY SETTINGS — {target_guild_name}", description=about)
+        await ctx.send(embed=tutorial_embed)
+        if log:
+            await send_webhook(
+                title=f'{target_guild_name} - /settings called',
+                load=f'user: {ctx.user.username}\n'
+                     f'**Current Settings:**\n**quickembeds**: {qe}\n{cs}\n**embed_buttons**: {es}\n\n',
+                color=COLOR_GREEN,
+                url=APPUSE_LOG_WEBHOOK,
+                logger=self.logger
+            )
+
+    async def check_monthly_winner(self):
+        if not self.ready:
+            return
+
+        now = datetime.now(tz=timezone.utc)
+        current_month_key = now.strftime('%Y-%m')
+
+        # Load persisted value on first run after restart
+        if self.last_winner_month is None:
+            self.last_winner_month = self.bot.guild_settings.get_bot_state('last_winner_month')
+
+        # Only announce on the 1st of the month, and only once per month
+        if now.day != 1 or self.last_winner_month == current_month_key:
+            return
+
+        self.logger.info("Monthly winner check triggered - it's the 1st of the month!")
+
+        try:
+            from bot.io.io import fetch_previous_vote_winner
+            data = await fetch_previous_vote_winner()
+            if not data.get('success'):
+                self.logger.error(f"Failed to fetch previous vote winner: {data}")
+                return
+
+            winners = data.get('winners', [])
+            vote_month = data.get('vote_month', '')
+            if not winners:
+                self.logger.info("No winners for the previous month (no votes)")
+                self.last_winner_month = current_month_key
+                self.bot.guild_settings.set_bot_state('last_winner_month', current_month_key)
+                return
+
+            # Parse month display
+            try:
+                from datetime import datetime as dt
+                month_dt = dt.strptime(vote_month, '%Y-%m')
+                month_display = month_dt.strftime('%B %Y')
+            except Exception:
+                month_display = vote_month
+
+            winner_votes = winners[0]['monthly_votes']
+
+            # Award tokens to all winners
+            for winner in winners:
+                try:
+                    winner_user = await self.bot.fetch_user(winner['user_id'])
+                    await subtract_tokens(
+                        winner_user,
+                        -MONTHLY_WINNER_TOKENS,
+                        reason='Monthly Vote Champion Reward',
+                        description=f'Won the {month_display} voting competition with {winner_votes} votes'
+                    )
+                    self.logger.info(f"Awarded {MONTHLY_WINNER_TOKENS} tokens to {winner['username']} ({winner['user_id']})")
+                except Exception as e:
+                    self.logger.error(f"Failed to award tokens to monthly winner {winner['user_id']}: {e}")
+
+            # Send announcement
+            try:
+                server = self.bot.get_guild(1117149574730104872)
+                if server is None:
+                    self.logger.warning("Could not find support server for monthly winner announcement")
+                    self.last_winner_month = current_month_key
+                    self.bot.guild_settings.set_bot_state('last_winner_month', current_month_key)
+                    return
+
+                channel = server.get_channel(MONTHLY_WINNER_CHANNEL_ID)
+                if channel is None:
+                    channel = await server.fetch_channel(MONTHLY_WINNER_CHANNEL_ID)
+
+                if channel is None:
+                    self.logger.warning(f"Could not find channel {MONTHLY_WINNER_CHANNEL_ID} for monthly winner announcement")
+                    self.last_winner_month = current_month_key
+                    self.bot.guild_settings.set_bot_state('last_winner_month', current_month_key)
+                    return
+
+                if len(winners) == 1:
+                    w = winners[0]
+                    description = (
+                        f"Congratulations to **{w['username']}** for being the top voter of **{month_display}**!\n\n"
+                        f"They cast **{winner_votes}** vote{'s' if winner_votes != 1 else ''} and have been awarded "
+                        f"**{MONTHLY_WINNER_TOKENS} VIP tokens**!\n\n"
+                        f"Vote this month to claim the title next time!"
+                    )
+                    title = f"Monthly Voting Champion - {month_display}"
+                else:
+                    winner_list = ", ".join(f"**{w['username']}**" for w in winners)
+                    description = (
+                        f"Congratulations to our top voters of **{month_display}**!\n"
+                        f"{winner_list} — **{winner_votes}** vote{'s' if winner_votes != 1 else ''} each\n\n"
+                        f"Each winner has been awarded **{MONTHLY_WINNER_TOKENS} VIP tokens**!\n\n"
+                        f"Vote this month to claim the title next time!"
+                    )
+                    title = f"Monthly Voting Champions - {month_display}"
+
+                embed = Embed(title=title, description=description, color=0xFFD700)
+                embed.set_footer(text=f"Use /rank to see your current standing")
+                await channel.send(embed=embed, components=[
+                    Button(style=ButtonStyle.LINK, label="Vote Now!", url=CLYPPY_VOTE_URL),
+                ])
+                self.logger.info(f"Sent monthly winner announcement for {month_display}")
+            except Exception as e:
+                self.logger.error(f"Failed to send monthly winner announcement: {e}")
+
+            self.last_winner_month = current_month_key
+            self.bot.guild_settings.set_bot_state('last_winner_month', current_month_key)
+        except Exception as e:
+            self.logger.error(f"Error in check_monthly_winner: {e}")
+
+    async def db_save_task(self):
+        if not self.ready:
+            self.logger.info("Bot not ready, skipping database save task")
+            return
+
+        self.logger.info("Saving database to the server...")
+        await self.bot.guild_settings.save()
+
+    async def refresh_cookies_task(self):
+        """Download cookies from felixcreations.com every 24 hours"""
+        if not self.ready:
+            self.logger.info("Bot not ready, skipping cookie refresh task")
+            return
+
+        if is_contrib_instance(self.logger):
+            log_api_bypass(self.logger, "https://felixcreations.com/api/cookies/get", "GET")
+            self.logger.info("[CONTRIB MODE] Cookie refresh bypassed")
+            return
+
+        self.logger.info("Downloading cookies from server...")
+
+        # Check if API key is available
+        api_key = os.getenv('clyppy_post_key')
+        if not api_key:
+            self.logger.warning("Cookie refresh skipped: clyppy_post_key not set")
+            return
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = "https://felixcreations.com/api/cookies/get"
+                headers = {'X-API-Key': api_key}
+                async with session.get(url, headers=headers) as response:
+                    if response.status == 200:
+                        cookies_content = await response.text()
+                        cookie_file_path = os.getenv('COOKIE_FILE', '/tmp/cookies.txt')
+                        with open(cookie_file_path, 'w') as f:
+                            f.write(cookies_content)
+
+                        self.logger.info(f"Successfully updated cookies at {cookie_file_path}")
+                    else:
+                        self.logger.warning(f"Failed to download cookies: HTTP {response.status}")
+        except Exception as e:
+            self.logger.error(f"Error downloading cookies: {e}")
+
     @listen()
     async def on_guild_join(self, event: GuildJoin):
         if self.ready:
