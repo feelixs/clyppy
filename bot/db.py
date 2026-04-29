@@ -100,7 +100,13 @@ class GuildDatabase:
             conn.execute('''
                             CREATE TABLE IF NOT EXISTS auto_delete (
                                 guild_id INTEGER PRIMARY KEY,
-                                setting BOOLEAN
+                                setting TEXT
+                            )
+                        ''')
+            conn.execute('''
+                            CREATE TABLE IF NOT EXISTS default_download_filetype (
+                                guild_id INTEGER PRIMARY KEY,
+                                setting TEXT
                             )
                         ''')
             conn.execute('''
@@ -142,6 +148,32 @@ class GuildDatabase:
                     logger.info(f"Migration complete: {len(rows)} guilds migrated")
             except Exception as e:
                 logger.error(f"Migration check failed: {e}")
+
+            # Migration: Convert boolean auto_delete to TEXT if needed
+            try:
+                cursor = conn.execute('PRAGMA table_info(auto_delete)')
+                columns = {c[1]: c[2] for c in cursor.fetchall()}
+
+                if 'setting' in columns and columns['setting'].upper() != 'TEXT':
+                    logger.info(f"Migrating auto_delete from {columns['setting']} to TEXT...")
+                    cursor = conn.execute('SELECT guild_id, setting FROM auto_delete')
+                    rows = cursor.fetchall()
+
+                    conn.execute('DROP TABLE auto_delete')
+                    conn.execute('''
+                        CREATE TABLE auto_delete (
+                            guild_id INTEGER PRIMARY KEY,
+                            setting TEXT
+                        )
+                    ''')
+
+                    for guild_id, old_val in rows:
+                        new_val = 'true' if old_val else 'false'
+                        conn.execute('INSERT INTO auto_delete VALUES (?, ?)',
+                                     (guild_id, new_val))
+                    logger.info(f"auto_delete migration complete: {len(rows)} guilds migrated")
+            except Exception as e:
+                logger.error(f"auto_delete migration check failed: {e}")
 
             # Migration: Add channel_id column for channel-level quickembed settings
             try:
@@ -205,7 +237,7 @@ class GuildDatabase:
             logger.error(f"Database error when setting nsfw_enabled for guild {guild_id}: {e}")
             return False
 
-    def get_auto_delete(self, guild_id) -> bool:
+    def get_auto_delete(self, guild_id) -> str:
         try:
             with self.get_db() as conn:
                 cursor = conn.execute(
@@ -213,12 +245,17 @@ class GuildDatabase:
                     (guild_id,)
                 )
                 result = cursor.fetchone()
-                return result[0] if result else False
+                if not result:
+                    return 'embeds'
+                val = result[0]
+                if isinstance(val, int):
+                    return 'true' if val else 'false'
+                return str(val).lower() if val else 'embeds'
         except sqlite3.Error as e:
             logger.error(f"Database error when getting auto_delete for guild {guild_id}: {e}")
-            return False  # default = false
+            return 'embeds'
 
-    def set_auto_delete(self, guild_id: int, new: bool) -> bool:
+    def set_auto_delete(self, guild_id: int, new: str) -> bool:
         try:
             with self.get_db() as conn:
                 conn.execute('''
@@ -229,6 +266,34 @@ class GuildDatabase:
                 return True
         except sqlite3.Error as e:
             logger.error(f"Database error when setting auto_delete for guild {guild_id}: {e}")
+            return False
+
+    def get_default_download_filetype(self, guild_id) -> str:
+        try:
+            with self.get_db() as conn:
+                cursor = conn.execute(
+                    'SELECT setting FROM default_download_filetype WHERE guild_id = ?',
+                    (guild_id,)
+                )
+                result = cursor.fetchone()
+                if not result or not result[0]:
+                    return 'mp4'
+                return str(result[0]).lower()
+        except sqlite3.Error as e:
+            logger.error(f"Database error when getting default_download_filetype for guild {guild_id}: {e}")
+            return 'mp4'
+
+    def set_default_download_filetype(self, guild_id: int, new: str) -> bool:
+        try:
+            with self.get_db() as conn:
+                conn.execute('''
+                    INSERT OR REPLACE INTO default_download_filetype (guild_id, setting)
+                    VALUES (?, ?)
+                ''', (guild_id, new))
+                conn.commit()
+                return True
+        except sqlite3.Error as e:
+            logger.error(f"Database error when setting default_download_filetype for guild {guild_id}: {e}")
             return False
 
     def _parse_quickembed_setting(self, setting: str) -> List[str]:

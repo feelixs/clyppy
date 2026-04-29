@@ -1,4 +1,4 @@
-from interactions import Permissions, Embed, Message, Button, ButtonStyle, SlashContext, TYPE_THREAD_CHANNEL, ActionRow, errors
+from interactions import Permissions, Embed, Message, Button, ButtonStyle, SlashContext, TYPE_THREAD_CHANNEL, ActionRow, MessageFlags, errors
 from bot.errors import VideoTooLong, NoDuration, UnknownError, DefinitelyNoDuration, NSFWEmbed
 from bot.io import get_aiohttp_session, is_404, fetch_video_status, get_clip_info, subtract_tokens, push_interaction_error
 from datetime import datetime, timezone, timedelta
@@ -684,7 +684,7 @@ class AutoEmbedder:
 
                 # send message
                 # Check if it's a SlashContext (or MinimalContext with send method)
-                delete_message = self.bot.guild_settings.get_auto_delete(guild.id)
+                auto_delete_mode = self.bot.guild_settings.get_auto_delete(guild.id)
                 if isinstance(respond_to, SlashContext) or (hasattr(respond_to, 'send') and not hasattr(respond_to, 'reply')):
                     # slash command
                     if uploading_to_discord:
@@ -693,7 +693,7 @@ class AutoEmbedder:
                         bot_message = await respond_to.send(clip.clyppy_url, components=comp)
                 else:
                     # message
-                    msg_content = f'<@!{respond_to.author.id}> ' if delete_message else ''
+                    msg_content = f'<@!{respond_to.author.id}> ' if auto_delete_mode == 'true' else ''
                     try:
                         if uploading_to_discord:
                             bot_message = await respond_to.reply(msg_content, file=response.local_file_path, components=comp)
@@ -701,7 +701,7 @@ class AutoEmbedder:
                             bot_message = await respond_to.reply(f'{msg_content}{clip.clyppy_url}', components=comp)
                     except Exception as e:
                         self.logger.info(f"Error replying to message: {str(e)} - sending to channel instead")
-                        delete_message = False
+                        auto_delete_mode = 'false'
                         # assume message to reply to was deleted
                         if uploading_to_discord:
                             bot_message = await respond_to.channel.send(
@@ -724,10 +724,15 @@ class AutoEmbedder:
 
                     try:
                         i = respond_to.guild.me
-                        if delete_message and respond_to.channel.permissions_for(i).VIEW_CHANNEL and i.has_permission(Permissions.MANAGE_MESSAGES):
+                        can_manage = respond_to.channel.permissions_for(i).VIEW_CHANNEL and i.has_permission(Permissions.MANAGE_MESSAGES)
+                        if auto_delete_mode == 'true' and can_manage:
                             asyncio.create_task(respond_to.delete())  # delete the parent message
+                        elif auto_delete_mode == 'embeds' and can_manage:
+                            existing_flags = int(getattr(respond_to, 'flags', 0) or 0)
+                            new_flags = existing_flags | int(MessageFlags.SUPPRESS_EMBEDS)
+                            asyncio.create_task(respond_to.edit(flags=new_flags))
                     except Exception as e:
-                        self.logger.warning(f"Error while trying to delete pparent message: {str(e)}")
+                        self.logger.warning(f"Error while applying auto_delete '{auto_delete_mode}' to parent message: {str(e)}")
 
                 if result['success']:
                     # Handle both Message objects and dict responses (from restored tasks)

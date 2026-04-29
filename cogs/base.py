@@ -15,10 +15,16 @@ from bot.io import (get_clip_info, callback_clip_delete_msg, add_reqqed_by, subt
                     preview_backup, create_backup, register_download,
                     log_guild_install, log_guild_left, log_guild_event)
 from bot.types import COLOR_GREEN, COLOR_RED
+from bot.tools.converter import SUPPORTED_FORMATS
 import logging
 import asyncio
 import aiohttp
 import os
+
+
+_DOWNLOAD_FILETYPE_CHOICES = [
+    SlashCommandChoice(name=ext, value=ext) for ext in SUPPORTED_FORMATS.keys()
+]
 
 
 def random_greeting() -> str:
@@ -46,7 +52,8 @@ class Base(Extension):
         self.logger = logging.getLogger(__name__)
         self.save_task = Task(self.db_save_task, IntervalTrigger(seconds=60 * 30))  # save db every 30 minutes
         self.cookie_refresh_task = Task(self.refresh_cookies_task, IntervalTrigger(seconds=60 * 60))  # refresh cookies every
-        self.status_update_task = Task(self.update_status, IntervalTrigger(seconds=60 * 5))  # update status every few minutes
+        self.status_update_task = Task(self.update_status, IntervalTrigger(seconds=60 * 5))  # cycle status every 5 minutes
+        self._status_cycle_idx = 0
         self.monthly_winner_task = Task(self.check_monthly_winner, IntervalTrigger(seconds=60 * 60))  # check every hour
         self.last_winner_month = None
         self.base_embedder = self.bot.base_embedder.embedder
@@ -469,8 +476,13 @@ class Base(Extension):
         embedded_url = clip_info['embedded_url']
         fallback_url = f"https://clyppy.io/clip-downloader?clip={embedded_url}"
 
+        if ctx.guild is not None:
+            file_ext = self.bot.guild_settings.get_default_download_filetype(ctx.guild.id)
+        else:
+            file_ext = 'mp4'
+
         try:
-            await self._run_download_pipeline(ctx, embedded_url, "mp4")
+            await self._run_download_pipeline(ctx, embedded_url, file_ext)
         except Exception:
             await ctx.send(
                 f"The inline download failed. Please visit {fallback_url} in your browser to continue.",
@@ -610,38 +622,6 @@ class Base(Extension):
         # Update message
         await ctx.edit_origin(embed=embed, components=buttons)
 
-    @slash_command(name="setquickembeds", scopes=[759798762171662399], options=[
-        SlashCommandOption(name="guild_id", type=OptionType.STRING, required=True),
-        SlashCommandOption(name="value", type=OptionType.STRING, required=True,
-                           description="Platforms: 'all', 'none', or comma-separated (e.g., 'twitch,kick')")])
-    async def setquickembeds(self, ctx, guild_id: str, value: str):
-        success, error_msg, valid_platforms = self.bot.guild_settings.set_quickembed_platforms(int(guild_id), value)
-        if success:
-            return await ctx.send(f"OK! Set quickembeds to: {valid_platforms if valid_platforms else 'none'}")
-        else:
-            return await ctx.send(f"Error: {error_msg}")
-
-    @slash_command(name="change_tokens", scopes=[759798762171662399], options=[
-        SlashCommandOption(name="user_id", type=OptionType.STRING, required=True),
-        SlashCommandOption(name="value", type=OptionType.INTEGER, required=True),
-        SlashCommandOption(name="add", type=OptionType.BOOLEAN, required=False),
-        SlashCommandOption(name="reason", type=OptionType.STRING, required=False)
-    ])
-    async def change_tokens(self, ctx, user_id: int, value: int, add=True, reason: str = 'Token Adjustment'):
-        try:
-            u = await self.bot.fetch_user(user_id)
-        except Exception as e:
-            await ctx.send(f"Error while fetching user {user_id}: {e}")
-            return
-
-        if add:
-            value *= -1  # because the api endpoint is for subtraction
-        try:
-            s = await subtract_tokens(u, value, reason=reason)
-            await ctx.send(f"The change returned {s}")
-        except Exception as e:
-            await ctx.send(str(e))
-
     @slash_command(name="save", description="Save Clyppy DB", scopes=[759798762171662399])
     async def save(self, ctx: SlashContext):
         await ctx.defer()
@@ -649,106 +629,6 @@ class Base(Extension):
         await self.bot.guild_settings.save()
         await self.post_servers(len(self.bot.guilds))
         await ctx.send("You can now safely exit.")
-
-    @slash_command(name="viewsettings", description="View settings for a guild", scopes=[759798762171662399], options=[
-        SlashCommandOption(name="guild_id", type=OptionType.STRING, required=True, description="Guild ID to view")])
-    async def viewsettings(self, ctx: SlashContext, guild_id: str):
-        await ctx.defer()
-
-        try:
-            gid = int(guild_id)
-        except ValueError:
-            await ctx.send("Invalid guild ID.")
-            return
-
-        # Fetch all settings
-        quickembeds, qe_is_default = self.bot.guild_settings.get_quickembed_platforms(gid)
-        error_channel = self.bot.guild_settings.get_error_channel(gid)
-        embed_buttons = self.bot.guild_settings.get_embed_buttons(gid)
-        on_error = self.bot.guild_settings.get_on_error(gid)
-        nsfw_enabled = self.bot.guild_settings.get_nsfw_enabled(gid)
-        auto_delete = self.bot.guild_settings.get_auto_delete(gid)
-
-        # Format response
-        embed = Embed(
-            title=f"Settings for Guild {gid}",
-            color=COLOR_GREEN
-        )
-        s = ", ".join(quickembeds) if quickembeds else "None"
-        embed.add_field(name="QuickEmbed Platforms", value=f'{s} (default)' if qe_is_default else s, inline=False)
-        embed.add_field(name="Error Channel", value=f"<#{error_channel}>" if error_channel else "Not set", inline=True)
-        embed.add_field(name="Embed Buttons", value=POSSIBLE_EMBED_BUTTONS[embed_buttons], inline=True)
-        embed.add_field(name="On Error", value=str(on_error), inline=True)
-        embed.add_field(name="NSFW Enabled", value="Yes" if nsfw_enabled else "No", inline=True)
-        embed.add_field(name="Auto Delete", value="Yes" if auto_delete else "No", inline=True)
-        await ctx.send(embed=embed)
-
-    @slash_command(
-        name="refresh_cookies",
-        description="Manually refresh cookies from server",
-        scopes=[759798762171662399],
-        options=[
-            SlashCommandOption(
-                name="confirm",
-                description="Type 'yes' to confirm",
-                type=OptionType.STRING,
-                required=True
-            )
-        ]
-    )
-    async def refresh_cookies_cmd(self, ctx: SlashContext, confirm: str):
-        if confirm.lower() != 'yes':
-            await ctx.send("Cancelled.", ephemeral=True)
-            return
-
-        await ctx.defer(ephemeral=True)
-        await self.refresh_cookies_task()
-        await ctx.send("✅ Cookies refreshed from server!", ephemeral=True)
-
-    @slash_command(
-        name="delete_message",
-        description="Manually delete a message sent by Clyppy",
-        scopes=[759798762171662399],
-        options=[
-            SlashCommandOption(
-                name="message_id",
-                description="The ID of the message to delete",
-                type=OptionType.STRING,
-                required=True
-            ),
-            SlashCommandOption(
-                name="channel_id",
-                description="The ID of the channel (or user ID if is_dm is True)",
-                type=OptionType.STRING,
-                required=True
-            ),
-            SlashCommandOption(
-                name="is_dm",
-                description="If True, channel_id is treated as a user ID to fetch their DM",
-                type=OptionType.BOOLEAN,
-                required=False
-            )
-        ]
-    )
-    async def delete_msg_cmd(self, ctx: SlashContext, message_id: str, channel_id: str, is_dm: bool = False):
-        await ctx.defer(ephemeral=True)
-
-        # Only allow specific user to use this command
-        if ctx.author.id != 164115540426752001:
-            await ctx.send("You are not authorized to use this command.")
-            return
-
-        try:
-            if is_dm:
-                user = await self.bot.fetch_user(int(channel_id))
-                channel = await user.fetch_dm(force=False)
-            else:
-                channel = await self.bot.fetch_channel(int(channel_id))
-            message = await channel.fetch_message(int(message_id))
-            await message.delete()
-            await ctx.send(f"Successfully deleted message {message_id} from {'DM with user ' if is_dm else 'channel '}{channel_id}")
-        except Exception as e:
-            await ctx.send(f"Error deleting message: {e}")
 
     @slash_command(name="rank", description="View your voting rank for this month!")
     async def rank(self, ctx: SlashContext):
@@ -1132,24 +1012,19 @@ class Base(Extension):
                            type=OptionType.STRING),
                        SlashCommandOption(
                            name="file_ext",
-                           description="Output format (mp4, webm, mov, avi, mp3, wav, ogg, flac, gif)",
-                           required=True,
+                           description="Output format (defaults to server setting, then mp4)",
+                           required=False,
                            type=OptionType.STRING,
-                           choices=[
-                               SlashCommandChoice(name="mp4", value="mp4"),
-                               SlashCommandChoice(name="webm", value="webm"),
-                               SlashCommandChoice(name="mov", value="mov"),
-                               SlashCommandChoice(name="avi", value="avi"),
-                               SlashCommandChoice(name="mp3", value="mp3"),
-                               SlashCommandChoice(name="wav", value="wav"),
-                               SlashCommandChoice(name="ogg", value="ogg"),
-                               SlashCommandChoice(name="flac", value="flac"),
-                               SlashCommandChoice(name="gif", value="gif"),
-                           ])
+                           choices=_DOWNLOAD_FILETYPE_CHOICES)
                    ])
-    async def download(self, ctx: SlashContext, url: str, file_ext: str):
+    async def download(self, ctx: SlashContext, url: str, file_ext: str = None):
         await ctx.defer()
 
+        if file_ext is None:
+            if ctx.guild is not None:
+                file_ext = self.bot.guild_settings.get_default_download_filetype(ctx.guild.id)
+            else:
+                file_ext = 'mp4'
         self.logger.info(f"@slash_command for /download - {ctx.author.id} - {url} -> {file_ext}")
         url = self._sanitize_url(url)
         file_ext = file_ext.lower().strip().lstrip('.')
@@ -1535,13 +1410,26 @@ class Base(Extension):
                        ),
                        SlashCommandOption(
                            name="auto_delete",
-                           type=OptionType.BOOLEAN,
-                           description="Automatically delete the parent message Clyppy responds to",
-                           required=False
+                           type=OptionType.STRING,
+                           description="What Clyppy does with the parent message after embedding",
+                           required=False,
+                           choices=[
+                               SlashCommandChoice(name="true (delete the parent message)", value="true"),
+                               SlashCommandChoice(name="false (leave parent message as-is)", value="false"),
+                               SlashCommandChoice(name="embeds (suppress embeds on parent message)", value="embeds"),
+                           ]
+                       ),
+                       SlashCommandOption(
+                           name="default_download_filetype",
+                           type=OptionType.STRING,
+                           description="Default output format for /download when no file_ext is given",
+                           required=False,
+                           choices=_DOWNLOAD_FILETYPE_CHOICES
                        )
                    ])
     async def settings(self, ctx: SlashContext, quickembeds: str = None, channel = None,
-                       on_error: str = None, embed_buttons: str = None, auto_delete: bool = None):
+                       on_error: str = None, embed_buttons: str = None, auto_delete: str = None,
+                       default_download_filetype: str = None):
         await ctx.defer()
         if ctx.guild is None:
             await ctx.send("This command is only available in servers.")
@@ -1551,337 +1439,21 @@ class Base(Extension):
             return
 
         if isinstance(ctx.author, Member) and not ctx.author.has_permission(Permissions.ADMINISTRATOR):
-            await self._send_settings_help(ctx, True)
+            await self._send_settings_help(ctx, ctx.guild.id, ctx.guild.name, prepend_admin=True, log=True)
             return
 
-        if on_error is None and embed_buttons is None and quickembeds is None and auto_delete is None:
-            await self._send_settings_help(ctx, False)
+        target_channel_id = channel.id if channel else None
+        target_channel_name = channel.name if channel else None
+
+        if (on_error is None and embed_buttons is None and quickembeds is None and auto_delete is None
+                and default_download_filetype is None):
+            await self._send_settings_help(ctx, ctx.guild.id, ctx.guild.name, prepend_admin=False, log=True)
             return
 
-        channel_id = channel.id if channel else None
-        current_qe_platforms, qe_is_default = self.bot.guild_settings.get_quickembed_platforms(ctx.guild.id, channel_id)
-        chosen_qe = current_qe_platforms
-        qe_scope = f"in {channel.mention}" if channel else "server-wide"
-
-        if quickembeds is not None:
-            # Handle reset command to remove channel override
-            if quickembeds.lower() == 'reset':
-                if channel_id is None:
-                    await ctx.send("Cannot reset server-wide settings. Use `quickembeds=none` to disable all platforms.")
-                    return
-                success = self.bot.guild_settings.delete_channel_quickembed_setting(ctx.guild.id, channel_id)
-                if success:
-                    await ctx.send(f"Channel override removed for {channel.mention}. Now using server-wide settings.")
-                else:
-                    await ctx.send("Error removing channel override.")
-                return
-
-            success, error_msg, valid_platforms = self.bot.guild_settings.set_quickembed_platforms(
-                ctx.guild.id, quickembeds, channel_id)
-            if not success:
-                await ctx.send(f"Error setting quickembeds: {error_msg}")
-                return
-            chosen_qe = valid_platforms
-            await log_guild_event(
-                guild_id=ctx.guild.id,
-                event_type='quickembeds_changed',
-                data={'platforms': chosen_qe, 'channel_id': channel_id, 'user_id': ctx.author.id},
-            )
-
-        # Get current settings
-        current_setting = self.bot.guild_settings.get_setting(ctx.guild.id)
-        current_on_error = POSSIBLE_ON_ERRORS[int(current_setting[1])]
-
-        # Use current values if not specified
-        on_error = on_error or current_on_error
-        if on_error not in POSSIBLE_ON_ERRORS:
-            await ctx.send(f"Option '{on_error}' not a valid **on_error** setting!\nMust be one of `{POSSIBLE_ON_ERRORS}`")
-            return
-
-        err_idx = POSSIBLE_ON_ERRORS.index(on_error)
-
-        # Handle embed settings
-        current_embed_setting: int = self.bot.guild_settings.get_embed_buttons(ctx.guild.id)
-        current_embed_setting: str = POSSIBLE_EMBED_BUTTONS[current_embed_setting]
-        embed_buttons = embed_buttons or current_embed_setting  # switch to current_embed_setting if it's not None
-
-        if embed_buttons not in POSSIBLE_EMBED_BUTTONS:
-            await ctx.send(f"Option '{embed_buttons}' not a valid **embed_buttons** setting!\n"
-                           f"Must be one of `{POSSIBLE_EMBED_BUTTONS}`")
-            return
-
-        embed_idx = POSSIBLE_EMBED_BUTTONS.index(embed_buttons)
-        self.bot.guild_settings.set_embed_buttons(ctx.guild.id, embed_idx)
-
-        # Handle auto_delete
-        if auto_delete is None:
-            auto_delete = self.bot.guild_settings.get_auto_delete(ctx.guild.id)
-        else:
-            self.bot.guild_settings.set_auto_delete(ctx.guild.id, auto_delete)
-
-        # Format quickembed display
-        from bot.db import VALID_QUICKEMBED_PLATFORMS
-        if not chosen_qe:
-            qe_display = "none"
-        elif set(chosen_qe) == set(VALID_QUICKEMBED_PLATFORMS):
-            qe_display = "all"
-        else:
-            qe_display = ', '.join(chosen_qe)
-
-        qe_scope_msg = f" ({qe_scope})" if quickembeds is not None else ""
-        await ctx.send(
-            "Successfully changed settings:\n\n"
-            f"**quickembeds**: {qe_display}{' (default)' if qe_is_default else ''}{qe_scope_msg}\n"
-            f"**on_error**: {on_error}\n"
-            f"**embed_buttons**: {embed_buttons}\n"
-            f"**auto_delete**: {'enabled' if auto_delete else 'disabled'}\n\n"
+        await self._apply_settings(
+            ctx, ctx.guild.id, ctx.guild.name, target_channel_id, target_channel_name,
+            quickembeds, on_error, embed_buttons, auto_delete, default_download_filetype, log=True,
         )
-        await send_webhook(
-            title=f'{"DM" if ctx.guild is None else ctx.guild.name} - /settings called',
-            load=f'user: {ctx.user.username}\n'
-                 "Successfully changed settings:\n\n"
-                 f"**quickembeds**: {qe_display}\n"
-                 f"**on_error**: {on_error}\n"
-                 f"**embed_buttons**: {embed_buttons}\n"
-                 f"**auto_delete**: {'enabled' if auto_delete else 'disabled'}\n\n",
-            color=COLOR_GREEN,
-            url=APPUSE_LOG_WEBHOOK,
-            logger=self.logger
-        )
-
-    async def _send_settings_help(self, ctx: SlashContext, prepend_admin: bool = False):
-        cs = self.bot.guild_settings.get_setting_str(ctx.guild.id)
-        es = self.bot.guild_settings.get_embed_buttons(ctx.guild.id)
-        qe_platforms, qe_is_default = self.bot.guild_settings.get_quickembed_platforms(ctx.guild.id)
-        auto_delete = self.bot.guild_settings.get_auto_delete(ctx.guild.id)
-        es = POSSIBLE_EMBED_BUTTONS[es]
-
-        # Format quickembed display
-        if not qe_platforms:
-            qe = "none"
-        elif 'all' in qe_platforms:
-            qe = "all"
-        else:
-            qe = ', '.join(qe_platforms)
-
-        # Use friendly platform names for display
-        valid_platforms_str = ', '.join(p.platform_name for p in self.bot.platform_list if not p.is_nsfw)
-
-        # Build channel overrides section
-        overrides = self.bot.guild_settings.list_channel_overrides(ctx.guild.id)
-        channel_overrides_section = ""
-        if overrides:
-            override_lines = []
-            for channel_id, setting in overrides:
-                try:
-                    channel_obj = self.bot.get_channel(channel_id)
-                    channel_name = channel_obj.mention if channel_obj else f"<#{channel_id}>"
-                    # Parse setting for display
-                    if setting == 'none':
-                        platforms = 'none'
-                    elif setting == 'all':
-                        platforms = 'all'
-                    else:
-                        platforms = ', '.join(setting.split(','))
-                    override_lines.append(f"  {channel_name}: {platforms}")
-                except Exception:
-                    pass
-            if override_lines:
-                channel_overrides_section = "\n\n**Channel Overrides:**\n" + "\n".join(override_lines)
-
-        about = (
-            '**Configurable Settings:**\n'
-            'Below are the settings you can configure using this command. Each setting name is in **bold** '
-            'followed by its available options.\n\n'
-            '**quickembeds** Configure which platforms Clyppy automatically embeds:\n'
-            ' - `all`: Enable for all platforms\n'
-            ' - `none`: Disable all quickembeds (use `/embed` command instead)\n'
-            ' - `reset`: Remove channel-specific override (use with `channel` parameter)\n'
-            f' - Comma-separated list: e.g., `Twitch,Kick,Medal`\n'
-            f' - Valid platforms: `None, All, {valid_platforms_str}, and more...`\n'
-            ' - Use `channel` parameter to apply to specific channel (blank = server-wide)\n\n'
-            '**on_error** Choose what Clyppy does when it encounters an error:\n'
-            ' - `info`: Respond to the message with the error.\n'
-            ' - `dm`: DM the message author about the error.\n\n'
-            '**embed_buttons** Choose which buttons Clyppy shows under embedded videos:\n'
-            ' - `none`: No buttons, just the video.\n'
-            ' - `view`: A button to the original clip.\n'
-            ' - `dl`: A button to download the original video file (on compatible clips).\n'
-            ' - `all`: Shows all available buttons.\n\n'
-            '**auto_delete** Automatically delete the parent message Clyppy responds to:\n'
-            ' - `True`: Delete the parent message after embedding.\n'
-            ' - `False`: Leave the parent message as-is.\n\n'
-            f'**Current Settings:**\n**quickembeds** (server-wide): {qe}{" (default)" if qe_is_default else ""}'
-            f'{channel_overrides_section}\n{cs}\n**embed_buttons**: {es}\n'
-            f'**auto_delete**: {"enabled" if auto_delete else "disabled"}\n\n'
-            f'Something missing? Please **[Suggest a Feature]({SUPPORT_SERVER_URL})**'
-        )
-
-        if prepend_admin:
-            about = "**ONLY MEMBERS WITH THE ADMINISTRATOR PERMISSIONS CAN EDIT SETTINGS**\n\n" + about
-
-        tutorial_embed = Embed(title="CLYPPY SETTINGS", description=about)
-        await ctx.send(embed=tutorial_embed)
-        await send_webhook(
-            title=f'{"DM" if ctx.guild is None else ctx.guild.name} - /settings called',
-            load=f'user: {ctx.user.username}\n'
-                 f'**Current Settings:**\n**quickembeds**: {qe}\n{cs}\n**embed_buttons**: {es}\n\n',
-            color=COLOR_GREEN,
-            url=APPUSE_LOG_WEBHOOK,
-            logger=self.logger
-        )
-
-    async def check_monthly_winner(self):
-        if not self.ready:
-            return
-
-        now = datetime.now(tz=timezone.utc)
-        current_month_key = now.strftime('%Y-%m')
-
-        # Load persisted value on first run after restart
-        if self.last_winner_month is None:
-            self.last_winner_month = self.bot.guild_settings.get_bot_state('last_winner_month')
-
-        # Only announce on the 1st of the month, and only once per month
-        if now.day != 1 or self.last_winner_month == current_month_key:
-            return
-
-        self.logger.info("Monthly winner check triggered - it's the 1st of the month!")
-
-        try:
-            from bot.io.io import fetch_previous_vote_winner
-            data = await fetch_previous_vote_winner()
-            if not data.get('success'):
-                self.logger.error(f"Failed to fetch previous vote winner: {data}")
-                return
-
-            winners = data.get('winners', [])
-            vote_month = data.get('vote_month', '')
-            if not winners:
-                self.logger.info("No winners for the previous month (no votes)")
-                self.last_winner_month = current_month_key
-                self.bot.guild_settings.set_bot_state('last_winner_month', current_month_key)
-                return
-
-            # Parse month display
-            try:
-                from datetime import datetime as dt
-                month_dt = dt.strptime(vote_month, '%Y-%m')
-                month_display = month_dt.strftime('%B %Y')
-            except Exception:
-                month_display = vote_month
-
-            winner_votes = winners[0]['monthly_votes']
-
-            # Award tokens to all winners
-            for winner in winners:
-                try:
-                    winner_user = await self.bot.fetch_user(winner['user_id'])
-                    await subtract_tokens(
-                        winner_user,
-                        -MONTHLY_WINNER_TOKENS,
-                        reason='Monthly Vote Champion Reward',
-                        description=f'Won the {month_display} voting competition with {winner_votes} votes'
-                    )
-                    self.logger.info(f"Awarded {MONTHLY_WINNER_TOKENS} tokens to {winner['username']} ({winner['user_id']})")
-                except Exception as e:
-                    self.logger.error(f"Failed to award tokens to monthly winner {winner['user_id']}: {e}")
-
-            # Send announcement
-            try:
-                server = self.bot.get_guild(1117149574730104872)
-                if server is None:
-                    self.logger.warning("Could not find support server for monthly winner announcement")
-                    self.last_winner_month = current_month_key
-                    self.bot.guild_settings.set_bot_state('last_winner_month', current_month_key)
-                    return
-
-                channel = server.get_channel(MONTHLY_WINNER_CHANNEL_ID)
-                if channel is None:
-                    channel = await server.fetch_channel(MONTHLY_WINNER_CHANNEL_ID)
-
-                if channel is None:
-                    self.logger.warning(f"Could not find channel {MONTHLY_WINNER_CHANNEL_ID} for monthly winner announcement")
-                    self.last_winner_month = current_month_key
-                    self.bot.guild_settings.set_bot_state('last_winner_month', current_month_key)
-                    return
-
-                if len(winners) == 1:
-                    w = winners[0]
-                    description = (
-                        f"Congratulations to **{w['username']}** for being the top voter of **{month_display}**!\n\n"
-                        f"They cast **{winner_votes}** vote{'s' if winner_votes != 1 else ''} and have been awarded "
-                        f"**{MONTHLY_WINNER_TOKENS} VIP tokens**!\n\n"
-                        f"Vote this month to claim the title next time!"
-                    )
-                    title = f"Monthly Voting Champion - {month_display}"
-                else:
-                    winner_list = ", ".join(f"**{w['username']}**" for w in winners)
-                    description = (
-                        f"Congratulations to our top voters of **{month_display}**!\n"
-                        f"{winner_list} — **{winner_votes}** vote{'s' if winner_votes != 1 else ''} each\n\n"
-                        f"Each winner has been awarded **{MONTHLY_WINNER_TOKENS} VIP tokens**!\n\n"
-                        f"Vote this month to claim the title next time!"
-                    )
-                    title = f"Monthly Voting Champions - {month_display}"
-
-                embed = Embed(title=title, description=description, color=0xFFD700)
-                embed.set_footer(text=f"Use /rank to see your current standing")
-                await channel.send(embed=embed, components=[
-                    Button(style=ButtonStyle.LINK, label="Vote Now!", url=CLYPPY_VOTE_URL),
-                ])
-                self.logger.info(f"Sent monthly winner announcement for {month_display}")
-            except Exception as e:
-                self.logger.error(f"Failed to send monthly winner announcement: {e}")
-
-            self.last_winner_month = current_month_key
-            self.bot.guild_settings.set_bot_state('last_winner_month', current_month_key)
-        except Exception as e:
-            self.logger.error(f"Error in check_monthly_winner: {e}")
-
-    async def db_save_task(self):
-        if not self.ready:
-            self.logger.info("Bot not ready, skipping database save task")
-            return
-
-        self.logger.info("Saving database to the server...")
-        await self.bot.guild_settings.save()
-
-    async def refresh_cookies_task(self):
-        """Download cookies from felixcreations.com every 24 hours"""
-        if not self.ready:
-            self.logger.info("Bot not ready, skipping cookie refresh task")
-            return
-
-        if is_contrib_instance(self.logger):
-            log_api_bypass(self.logger, "https://felixcreations.com/api/cookies/get", "GET")
-            self.logger.info("[CONTRIB MODE] Cookie refresh bypassed")
-            return
-
-        self.logger.info("Downloading cookies from server...")
-
-        # Check if API key is available
-        api_key = os.getenv('clyppy_post_key')
-        if not api_key:
-            self.logger.warning("Cookie refresh skipped: clyppy_post_key not set")
-            return
-
-        try:
-            async with aiohttp.ClientSession() as session:
-                url = "https://felixcreations.com/api/cookies/get"
-                headers = {'X-API-Key': api_key}
-                async with session.get(url, headers=headers) as response:
-                    if response.status == 200:
-                        cookies_content = await response.text()
-                        cookie_file_path = os.getenv('COOKIE_FILE', '/tmp/cookies.txt')
-                        with open(cookie_file_path, 'w') as f:
-                            f.write(cookies_content)
-
-                        self.logger.info(f"Successfully updated cookies at {cookie_file_path}")
-                    else:
-                        self.logger.warning(f"Failed to download cookies: HTTP {response.status}")
-        except Exception as e:
-            self.logger.error(f"Error downloading cookies: {e}")
 
     @listen()
     async def on_guild_join(self, event: GuildJoin):
@@ -2023,19 +1595,28 @@ class Base(Extension):
             self.logger.info("--------------")
 
     async def update_status(self):
-        """Fetch embed count and update bot status"""
+        """Cycle per-shard presence between embed count and tagline+shard id"""
+        show_count = self._status_cycle_idx % 2 == 0
+        self._status_cycle_idx += 1
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get("https://clyppy.io/api/stats/embeds-count/") as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        count = data.get("count", 0)
-                        self.bot.cached_embed_count = count
-                        status_text = format_count(count)
-                        await self.bot.change_presence(activity=Activity(name=status_text, type=ActivityType.PLAYING))
-                        self.logger.info(f"Updated status: {status_text}")
+            if show_count:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get("https://clyppy.io/api/stats/embeds-count/") as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            self.bot.cached_embed_count = data.get("count", 0)
+
+            shards = getattr(self.bot, "shards", None) or [self.bot._connection_state]
+            total = len(shards)
+            for shard in shards:
+                if show_count:
+                    text = format_count(getattr(self.bot, "cached_embed_count", 0))
+                else:
+                    text = f"video embeds for you (shard {shard.shard_id + 1}/{total})"
+                await shard.change_presence(activity=Activity(name=text, type=ActivityType.PLAYING))
+            self.logger.info(f"Updated status (count={show_count}) across {total} shard(s)")
         except Exception as e:
-            self.logger.warning(f"Failed to fetch embed count: {e}")
+            self.logger.warning(f"Failed to update status: {e}")
 
     async def post_servers(self, num: int):
         if os.getenv("TEST") is not None:

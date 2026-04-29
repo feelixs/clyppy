@@ -58,15 +58,12 @@ async def _identify_mobile(self) -> None:
     if self.ws is None:
         raise RuntimeError
 
-    # Fetch embed count for status
-    status_text = await fetch_embed_count(self.state.client)
-
     presence = {
         "status": "online",
         "since": None,
         "activities": [
             {
-                "name": status_text,
+                "name": "video embeds for you",
                 "type": 0,  # Playing
             }
         ],
