@@ -29,6 +29,7 @@ from bot.errors import (NoDuration, UnknownError, UploadFailed, NoPermsToView, V
 
 from urllib.parse import urlparse
 import hashlib
+import tempfile
 import aiohttp
 import logging
 import asyncio
@@ -209,12 +210,103 @@ def get_video_details(file_path) -> 'LocalFileInfo':
             clip.close()
 
 
-def fetch_cookies(opts, logger):
+# Persistent per-platform cookie file for YouTube. Lives outside the master
+# /tmp/cookies.txt because yt-dlp's writeback only saves cookies it touched —
+# pointing yt-dlp at the master destroys cookies for every other platform.
+# This file is writable so YouTube's rotated PSIDTS / SIDCC tokens persist
+# between requests, keeping the session alive indefinitely.
+YT_COOKIE_FILE = "/tmp/cookies_youtube.txt"
+
+
+def _bootstrap_youtube_cookies(master_path: str, yt_path: str) -> None:
+    """Extract just .youtube.com and .google.com cookies from the master file."""
+    with open(master_path, 'r') as src, open(yt_path, 'w') as dst:
+        for line in src:
+            if line.startswith('#') or line.startswith('.youtube.com') or line.startswith('.google.com'):
+                dst.write(line)
+
+
+def _youtube_cookies_healthy(yt_path: str) -> bool:
+    """Sanity-check the dedicated YouTube cookies file — must have auth cookies."""
+    if not os.path.exists(yt_path) or os.path.getsize(yt_path) < 1000:
+        return False
+    try:
+        with open(yt_path, 'r') as f:
+            content = f.read()
+        return '__Secure-1PSID' in content and 'SAPISID' in content
+    except OSError:
+        return False
+
+
+def _login_info_value(path: str) -> Optional[str]:
+    """Read the .youtube.com LOGIN_INFO cookie value from a cookies.txt file."""
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, 'r') as f:
+            for line in f:
+                if line.startswith('.youtube.com') and '\tLOGIN_INFO\t' in line:
+                    parts = line.rstrip('\n').split('\t')
+                    if len(parts) >= 7:
+                        return parts[6]
+    except OSError:
+        pass
+    return None
+
+
+def maybe_refresh_youtube_cookies(master_path: str, logger) -> bool:
+    """If the master's YouTube LOGIN_INFO differs from the dedicated file's,
+    the user has uploaded a fresh session — re-bootstrap the YouTube cookies
+    file from the master. Returns True if a refresh happened."""
+    if not os.path.exists(master_path):
+        return False
+    master_login = _login_info_value(master_path)
+    yt_login = _login_info_value(YT_COOKIE_FILE)
+    if master_login and master_login != yt_login:
+        try:
+            _bootstrap_youtube_cookies(master_path, YT_COOKIE_FILE)
+            logger.info(f"[refresh_cookies] Master LOGIN_INFO changed — re-bootstrapped YouTube cookies")
+            return True
+        except OSError as e:
+            logger.error(f"[refresh_cookies] Failed to re-bootstrap YouTube cookies: {e}")
+    return False
+
+
+def fetch_cookies(opts, logger, url=None):
     try:
         # Enable EJS Challenge solver
         opts['remote_components'] = ['ejs:github']
 
-        # Use Firefox profile directly (reads live cookies from mounted profile)
+        cookie_file = os.getenv("COOKIE_FILE", "/tmp/cookies.txt")
+        is_youtube = bool(url and ('youtube.com' in url or 'youtu.be' in url))
+
+        # YouTube uses a dedicated writable file so rotation tokens persist
+        # between requests. We bootstrap from the master if the file is
+        # missing or has been truncated/corrupted.
+        if is_youtube and cookie_file and os.path.exists(cookie_file):
+            if not _youtube_cookies_healthy(YT_COOKIE_FILE):
+                _bootstrap_youtube_cookies(cookie_file, YT_COOKIE_FILE)
+                logger.info(f"[fetch_cookies] Bootstrapped YouTube cookies → {YT_COOKIE_FILE}")
+            logger.info(f"[fetch_cookies] Using YouTube cookie file: {YT_COOKIE_FILE}")
+            opts['cookiefile'] = YT_COOKIE_FILE
+            return
+
+        # All other platforms: hand yt-dlp a per-request *copy* of the master.
+        # The copy gets the rotation writeback; the master stays intact so
+        # other platforms' cookies survive.
+        if cookie_file and os.path.exists(cookie_file):
+            tmp_copy = tempfile.NamedTemporaryFile(
+                mode='w', prefix='ytdlp_cookies_', suffix='.txt',
+                dir='/tmp', delete=False,
+            )
+            with open(cookie_file, 'r') as src:
+                tmp_copy.write(src.read())
+            tmp_copy.close()
+            logger.info(f"[fetch_cookies] Using cookie file: {cookie_file} (copy: {tmp_copy.name})")
+            opts['cookiefile'] = tmp_copy.name
+            return
+
+        # Fallback: read directly from a mounted Firefox profile
         cookie_dir = os.getenv("COOKIE_DIR")
         if cookie_dir:
             firefox_dir = Path(cookie_dir).expanduser()
@@ -229,13 +321,6 @@ def fetch_cookies(opts, logger):
                     logger.warning(f"[fetch_cookies] No Firefox profile found in {cookie_dir}")
             else:
                 logger.warning(f"[fetch_cookies] COOKIE_DIR does not exist: {cookie_dir}")
-
-        # Fallback to cookie file if COOKIE_FILE is set
-        cookie_file = os.getenv("COOKIE_FILE")
-        if cookie_file and os.path.exists(cookie_file):
-            logger.info(f"[fetch_cookies] Using cookie file: {cookie_file}")
-            opts['cookiefile'] = cookie_file
-            return
 
         logger.info("[fetch_cookies] No cookie source available, skipping cookies")
     except Exception as e:
@@ -453,7 +538,7 @@ class BaseClip(ABC):
             ydl_opts.update(extra_opts)
 
         if cookies:
-            fetch_cookies(ydl_opts, self.logger)
+            fetch_cookies(ydl_opts, self.logger, url=self.url)
 
         try:
             return await asyncio.get_event_loop().run_in_executor(
@@ -504,10 +589,6 @@ class BaseClip(ABC):
         return None
 
     async def dl_download(self, filename=None, dlp_format='best/bv*+ba', can_send_files=False, cookies=False, extra_opts=None) -> Optional[LocalFileInfo]:
-        if os.path.isfile(filename):
-            self.logger.info("file already exists! returning...")
-            return get_video_details(filename)
-
         ydl_opts = {
             'format': dlp_format,
             'outtmpl': filename,
@@ -525,7 +606,23 @@ class BaseClip(ABC):
         if extra_opts:
             ydl_opts.update(extra_opts)
 
-        if cookies: fetch_cookies(ydl_opts, self.logger)
+        if cookies: fetch_cookies(ydl_opts, self.logger, url=self.url)
+
+        if os.path.isfile(filename):
+            self.logger.info("file already exists! returning...")
+            d = get_video_details(filename)
+            try:
+                extracted = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    self._extract_info,
+                    ydl_opts
+                )
+                d.video_name = extracted.video_name
+                if d.video_name:
+                    self.title = d.video_name
+            except Exception as e:
+                self.logger.warning(f"dl_download cache-hit: failed to fetch title via yt-dlp: {e}")
+            return d
 
         try:
             with YoutubeDL(ydl_opts) as ydl:
@@ -543,6 +640,8 @@ class BaseClip(ABC):
                 )
                 d = get_video_details(filename)
                 d.video_name = extracted.video_name
+                if d.video_name:
+                    self.title = d.video_name
                 if is_discord_compatible(d.filesize) and can_send_files:
                     self.logger.info(f"{self.id} can be uploaded to discord...")
                     d.can_be_discord_uploaded = True
@@ -776,7 +875,7 @@ class BaseMisc(ABC):
             'user_agent': YT_DLP_USER_AGENT
         }
         if cookies:
-            fetch_cookies(ydl_opts, self.logger)
+            fetch_cookies(ydl_opts, self.logger, url=url)
 
         # Merge extra options (like impersonate for Canva)
         if extra_opts:

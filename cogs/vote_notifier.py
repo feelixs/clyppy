@@ -1,13 +1,14 @@
 import logging
-from interactions import Extension, Task, IntervalTrigger, listen
+from interactions import Extension, Task, IntervalTrigger, listen, Embed, Button, ButtonStyle
 from interactions.api.events import Startup
 from bot.io.io import get_pending_vote_notifications, mark_votes_notified
 from bot.env import vote_url, CLYPPYBOT_ID
+from bot.types import COLOR_GREEN
 
 logger = logging.getLogger(__name__)
 
 
-async def _format_vote_dm(entry: dict, user, bot) -> str:
+async def _build_vote_dm(entry: dict, user, bot) -> tuple[Embed, list[Button]]:
     total = entry.get('vote_count') or 0
     monthly = entry.get('vote_month_count') or 0
     source = entry.get('source', 'a bot list site')
@@ -22,11 +23,9 @@ async def _format_vote_dm(entry: dict, user, bot) -> str:
         t = '(unknown - use `/tokens`)'
 
     lines = [
-        "## Thanks for voting for Clyppy! 🎬",
-        "",
         f"You voted on **{source}** and earned **{tokens} VIP tokens**.",
         f"You now have {t} tokens. Go embed some videos with them!",
-        ""
+        "",
     ]
     if monthly > 1:
         lines.append(f"You've voted **{monthly}x** this month!")
@@ -35,9 +34,18 @@ async def _format_vote_dm(entry: dict, user, bot) -> str:
     lines += [
         "",
         "You can vote again in **12 hours**.",
-        f">>> {vote_url('post_vote_dm')}",
     ]
-    return "\n".join(lines)
+
+    embed = Embed(
+        title="Thanks for voting for Clyppy! 🎬",
+        description="\n".join(lines),
+        color=COLOR_GREEN,
+    )
+    components = [
+        Button(style=ButtonStyle.LINK, label="Vote again", url=vote_url('post_vote_dm')),
+        Button(style=ButtonStyle.LINK, label="Enjoying Clyppy? Leave a review", url="https://top.gg/bot/1111723928604381314#reviews"),
+    ]
+    return embed, components
 
 
 class VoteNotifier(Extension):
@@ -70,7 +78,8 @@ class VoteNotifier(Extension):
                         user = await self.bot.fetch_user(user_id)
                         if user:
                             dm = await user.fetch_dm(force=False)
-                            await dm.send(await _format_vote_dm(entry, user, self.bot))
+                            embed, components = await _build_vote_dm(entry, user, self.bot)
+                            await dm.send(embeds=[embed], components=components)
                         else:
                             logger.debug(f"Count not DM user: user {user_id} not found.")
                     else:

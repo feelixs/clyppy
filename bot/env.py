@@ -22,8 +22,8 @@ def log_api_bypass(logger, endpoint: str, method: str = "POST", data: dict = Non
 
 def create_nexus_comps():
     return [
-        Button(style=ButtonStyle.LINK, url=INVITE_LINK, label='Invite Clyppy'),
-        Button(style=ButtonStyle.LINK, url=SUPPORT_SERVER_URL, label='Support Server'),
+        Button(style=ButtonStyle.LINK, url=INVITE_LINK, label='Use CLYPPY'),
+        Button(style=ButtonStyle.LINK, url=SUPPORT_SERVER_URL, label='Join the Community'),
         Button(style=ButtonStyle.LINK, url=CLYPPY_VOTE_URL, label='Vote for me!'),
     ]
 
@@ -37,7 +37,7 @@ EMBED_TXT_COMMAND = ".embed"
 LOGGER_WEBHOOK = os.getenv('LOG_WEBHOOK')
 APPUSE_LOG_WEBHOOK = os.getenv('APPUSE_WEBHOOK')
 
-VERSION = "2.2.3"
+VERSION = "2.2.4"
 CLYPPYIO_USER_AGENT = f"ClyppyBot/{VERSION}"
 
 AI_EXTEND_TOKENS_COST = 10

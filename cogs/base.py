@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from bot.classes import BaseMisc, send_webhook
+from bot.classes import BaseMisc, send_webhook, maybe_refresh_youtube_cookies
 from typing import Tuple, Optional
 from re import compile, search as re_search
 from random import choice as random_choice
@@ -853,7 +853,7 @@ class Base(Extension):
                 reg_resp = await register_download(
                     clyppy_id=clip.clyppy_id,
                     service=clip.service,
-                    title=(clip.title or 'Clyppy Download'),
+                    title=(clip.title or getattr(local_info, 'video_name', None) or 'Clyppy Download'),
                     file_url=cdn_url,
                     file_size=out_file_size,
                     duration=out_duration,
@@ -887,14 +887,14 @@ class Base(Extension):
                     'create_new_video': False,
                     'interaction_type': interaction_type,
                     'server_name': (ctx.guild.name if ctx.guild else 'DM'),
-                    'channel_name': getattr(ctx.channel, 'name', 'dm'),
+                    'channel_name': (getattr(ctx.channel, 'name', None) or 'DM'),
                     'user_name': ctx.author.username or f"User_{ctx.author.id}",
                     'server_id': str(ctx.guild.id) if ctx.guild else str(ctx.author.id),
                     'channel_id': str(ctx.channel.id) if ctx.channel else '0',
                     'user_id': str(ctx.author.id),
                     'embedded_url': url,
                     'url_platform': platform.platform_name,
-                    'title': clip.title or ('Clyppy GIF' if interaction_type == 'giphify' else 'Clyppy Download'),
+                    'title': clip.title or getattr(local_info, 'video_name', None) or ('Clyppy GIF' if interaction_type == 'giphify' else 'Clyppy Download'),
                     'generated_id': clip.clyppy_id,
                     'original_id': clip.id,
                     'video_file_size': out_file_size,
@@ -1797,6 +1797,11 @@ class Base(Extension):
                             f.write(cookies_content)
 
                         self.logger.info(f"Successfully updated cookies at {cookie_file_path}")
+                        # If the user uploaded fresh YouTube cookies via
+                        # merge_yt_cookies.sh, re-bootstrap our dedicated
+                        # writable YouTube cookies file so it picks up the
+                        # new session instead of compounding stale rotations.
+                        maybe_refresh_youtube_cookies(cookie_file_path, self.logger)
                     else:
                         self.logger.warning(f"Failed to download cookies: HTTP {response.status}")
         except Exception as e:
@@ -1946,20 +1951,21 @@ class Base(Extension):
         show_count = self._status_cycle_idx % 2 == 0
         self._status_cycle_idx += 1
         try:
-            if show_count:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get("https://clyppy.io/api/stats/embeds-count/") as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            self.bot.cached_embed_count = data.get("count", 0)
+            #if show_count:
+            #    async with aiohttp.ClientSession() as session:
+            #        async with session.get("https://clyppy.io/api/stats/embeds-count/") as resp:
+            #            if resp.status == 200:
+            #                data = await resp.json()
+            #                self.bot.cached_embed_count = data.get("count", 0)
 
             shards = getattr(self.bot, "shards", None) or [self.bot._connection_state]
             total = len(shards)
             for shard in shards:
                 if show_count:
-                    text = format_count(getattr(self.bot, "cached_embed_count", 0))
+                    #text = format_count(getattr(self.bot, "cached_embed_count", 0))
+                    text =  f"shard {shard.shard_id + 1}/{total}"
                 else:
-                    text = f"video embeds for you (shard {shard.shard_id + 1}/{total})"
+                    text = f"video embeds for you • /help"
                 await shard.change_presence(activity=Activity(name=text, type=ActivityType.PLAYING))
             self.logger.info(f"Updated status (count={show_count}) across {total} shard(s)")
         except Exception as e:

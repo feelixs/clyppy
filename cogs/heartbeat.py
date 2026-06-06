@@ -4,6 +4,7 @@ import logging
 import psutil
 from interactions import Extension, Task, IntervalTrigger, listen
 from interactions.api.events import Startup
+from bot.env import VERSION
 from bot.io.io import post_health_snapshot
 from bot.health import get_rate_limit_snapshot, reset_rate_limit_counts, PROCESS_START_TIME
 
@@ -72,6 +73,8 @@ class Heartbeat(Extension):
                 "task_queue_quickembeds": queue_counts[0],
                 "task_queue_slash": queue_counts[1],
                 "guilds_count": len(getattr(self.bot, 'guilds', None) or []),
+                # bot version (clyppy-web caches the last pushed value for portfolio_health)
+                "version": VERSION,
             }
 
             await post_health_snapshot(payload, logger)

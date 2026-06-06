@@ -170,7 +170,15 @@ def handle_yt_dlp_err(err: str, file_path: str = None):
         raise RemoteTimeoutError
     elif '401:Unauthorized' in err.replace(" ", ""):
         raise YtDlpForbiddenError
-    elif 'HTTP Error 403: Forbidden' in err or 'Use --cookies,' in err:
+    elif (
+        'HTTP Error 403: Forbidden' in err
+        or 'Use --cookies,' in err
+        or 'Use --cookies-from-browser or --cookies' in err  # YouTube bot detection
+        or "Sign in to confirm you're not a bot" in err  # YouTube bot detection
+        or "Sign in to confirm you’re not a bot" in err  # variant with curly apostrophe
+        or 'The downloaded file is empty' in err  # YouTube SABR/HLS delivery failure
+        or 'unable to download video data' in err  # CDN-level rejection
+    ):
         raise YtDlpForbiddenError
     elif 'HTTP Error 429' in err or '429: Too Many Requests' in err:
         raise RateLimitedByPlatformError

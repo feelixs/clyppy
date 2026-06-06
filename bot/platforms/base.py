@@ -77,10 +77,11 @@ class BASIC_CLIP(BaseClip):
 
         info = await asyncio.get_event_loop().run_in_executor(None, extract)
 
+        # Some platforms (e.g. Pinterest) only serve HLS manifests and have no
+        # top-level `url` field — they require a full yt-dlp download. Return
+        # None so the caller can fall through to the download path instead of
+        # raising and failing the whole embed.
         cdn_url = info.get('url')
-        if not cdn_url:
-            raise Exception("Failed to extract CDN URL")
-
         return cdn_url, info
 
     async def download(self, filename=None, dlp_format='best/bv*+ba', can_send_files=False, cookies=False, extra_opts=None) -> DownloadResponse:

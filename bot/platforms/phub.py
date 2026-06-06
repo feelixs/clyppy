@@ -2,7 +2,10 @@ import re
 from bot.types import DownloadResponse
 from bot.errors import VideoTooLong, NoDuration
 from bot.classes import BaseClip, BaseMisc
+from yt_dlp.networking.impersonate import ImpersonateTarget
 from typing import Optional
+
+PHUB_EXTRA_OPTS = {'impersonate': ImpersonateTarget.from_str('chrome')}
 
 
 class PhubMisc(BaseMisc):
@@ -25,7 +28,8 @@ class PhubMisc(BaseMisc):
         valid, tokens_used, duration = await self.is_shortform(
             url=url,
             basemsg=basemsg,
-            cookies=cookies
+            cookies=cookies,
+            extra_opts=PHUB_EXTRA_OPTS
         )
         if not valid:
             self.logger.info(f"{url} is_shortform=False")
@@ -51,10 +55,14 @@ class PhubClip(BaseClip):
 
     async def download(self, filename=None, dlp_format='best/bv*+ba', can_send_files=False, cookies=False, extra_opts=None) -> DownloadResponse:
         self.logger.info(f"({self.id}) run dl_check_size(upload_if_large=True)...")
+        if extra_opts is None:
+            extra_opts = {}
+        extra_opts['impersonate'] = ImpersonateTarget.from_str('chrome')
         return await super().dl_check_size(
             filename=filename,
             dlp_format=dlp_format,
             can_send_files=can_send_files,
             cookies=cookies,
-            upload_if_large=True
+            upload_if_large=True,
+            extra_opts=extra_opts
         )

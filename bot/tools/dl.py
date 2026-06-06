@@ -37,7 +37,7 @@ class DownloadManager:
 
         if skip_upload or extend_with_ai:
             # force manual override of auto-upload (download() may upload, but dl_download() doesn't)
-            r: LocalFileInfo = await clip.dl_download(filename=desired_filename, can_send_files=can_send_files)
+            r: LocalFileInfo = await clip.dl_download(filename=desired_filename, can_send_files=can_send_files, cookies=True)
         else:
             r: DownloadResponse = await clip.download(filename=desired_filename, can_send_files=can_send_files)
 
