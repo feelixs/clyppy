@@ -46,6 +46,7 @@ EMBED_TOKEN_COST = 1
 EMBED_W_TOKEN_MAX_LEN = 5 * 60  # 5 minutes
 EMBED_TOTAL_MAX_LENGTH = 4 * 60 * 60  # 4 hours
 MAX_VIDEO_LEN_SEC = 60 * 5
+EMBED_TOKEN_GRACE_SEC = 30  # round-down leeway: a token isn't charged until 30s past each block boundary
 
 MIN_VIDEO_LEN_FOR_EXTEND = 6
 MAX_VIDEO_LEN_FOR_EXTEND = 60
