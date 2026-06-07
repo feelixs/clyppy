@@ -200,7 +200,12 @@ class InstagramClip(BaseClip):
 
                 self.logger.info(f"({self.id}) Got CDN URL: {cdn_url[:100]}...")
 
-                async with session.get(cdn_url, headers={"User-Agent": _DISCORD_UA}) as response:
+                # CDN URLs can stall for non-app clients: the connection opens but
+                # the body never (or barely) flows. Without an explicit timeout this
+                # falls back to aiohttp's 300s default and the download coroutine
+                # blocks for ~5 min. sock_read fails fast on a stalled mid-stream body.
+                cdn_timeout = aiohttp.ClientTimeout(total=60, sock_connect=5, sock_read=15)
+                async with session.get(cdn_url, headers={"User-Agent": _DISCORD_UA}, timeout=cdn_timeout) as response:
                     if response.status != 200:
                         self.logger.error(f"Failed to download from CDN, status {response.status}")
                         return None
