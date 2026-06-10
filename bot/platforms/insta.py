@@ -91,9 +91,10 @@ class InstagramMisc(BaseMisc):
         self.min_delay = 5  # Minimum 5 seconds between requests
 
     # Matches reels, posts (single photo/video or carousel), and IGTV.
-    # Group 1 = path segment (reel|p|tv), group 2 = shortcode.
+    # Group 1 = path segment (reel|reels|p|tv), group 2 = shortcode.
+    # The app's share button produces the plural /reels/ form.
     _URL_RE = re.compile(
-        r'(?:https?://)?(?:www\.)?instagram\.com/(reel|p|tv)/([a-zA-Z0-9_-]+)(?:/|$|\?)'
+        r'(?:https?://)?(?:www\.)?instagram\.com/(reels?|p|tv)/([a-zA-Z0-9_-]+)(?:/|$|\?)'
     )
 
     def parse_clip_url(self, url: str, extended_url_formats=False) -> Optional[str]:
@@ -111,6 +112,8 @@ class InstagramMisc(BaseMisc):
             raise NoDuration
 
         path, shortcode = match.group(1), match.group(2)
+        if path == "reels":
+            path = "reel"  # normalize so rebuilt/proxy URLs use the canonical form
         return InstagramClip(shortcode, self.cdn_client, 0, 0, self, path=path)
 
 
