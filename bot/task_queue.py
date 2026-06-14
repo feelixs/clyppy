@@ -1,4 +1,5 @@
 """Task queue for graceful shutdown and restart."""
+import os
 import pickle
 import logging
 import json
@@ -55,17 +56,23 @@ class TaskQueue:
         self.slash_command_tasks: List[SlashCommandTask] = []
 
     def add_quickembed(self, task: QuickembedTask):
-        """Add a quickembed task to the queue."""
+        """Add a quickembed task to the queue and persist immediately."""
         self.quickembed_tasks.append(task)
         logger.info(f"Queued quickembed task: {task.clip_url} from message {task.message_id}")
+        self.save()
 
     def add_slash_command(self, task: SlashCommandTask):
-        """Add a slash command task to the queue."""
+        """Add a slash command task to the queue and persist immediately."""
         self.slash_command_tasks.append(task)
         logger.info(f"Queued slash command task: {task.clip_url} from user {task.user_username}")
+        self.save()
 
     def save(self):
-        """Persist the queue to disk using pickle."""
+        """Persist the queue to disk using pickle.
+
+        Writes to a temp file then renames so a SIGKILL mid-write can't
+        leave a corrupt/partial queue file.
+        """
         try:
             queue_data = {
                 'quickembed_tasks': self.quickembed_tasks,
@@ -73,8 +80,12 @@ class TaskQueue:
                 'saved_at': datetime.now()
             }
 
-            with open(self.queue_file, 'wb') as f:
+            tmp_file = self.queue_file.with_suffix('.pkl.tmp')
+            with open(tmp_file, 'wb') as f:
                 pickle.dump(queue_data, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_file, self.queue_file)
 
             logger.info(f"Saved {len(self.quickembed_tasks)} quickembed tasks and "
                        f"{len(self.slash_command_tasks)} slash command tasks to {self.queue_file}")

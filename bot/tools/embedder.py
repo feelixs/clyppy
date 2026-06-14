@@ -66,8 +66,10 @@ class AutoEmbedder:
 
     @staticmethod
     def get_words(text: str) -> List[str]:
-        # Extract URLs from Discord markdown links [text](url) before splitting
-        text = re.sub(r'\[.*?]\((https?://[^\s)]+)\)', r'\1', text)
+        # Extract URLs from Discord markdown links. Handles both forms:
+        #   [text](https://url)           — regular markdown link
+        #   [text](<https://url>)         — angle-bracket form (suppresses Discord preview)
+        text = re.sub(r'\[.*?]\(<?(https?://[^\s)>]+)>?\)', r'\1', text)
         return re.split(r"[ \n]+", text)
 
     def get_next_clip_link_loc(self, words: List[str], n=0, print=True) -> Tuple[bool, int]:

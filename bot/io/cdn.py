@@ -41,20 +41,25 @@ class CdnSpacesClient:
         filename = file_path.split("/")[-1]
         cdn_patj = f"img/{filename}"
         self.logger.info(f"Uploading {filename} to {cdn_patj}")
-        with open(file_path, 'rb') as file:
-            img_data = file.read()
         try:
-            self.client.put_object(
-                Bucket='clyppy',
-                Key=cdn_patj,
-                Body=img_data,
-                ACL='public-read',
-                ContentType='image/webp'
-            )
+            # File read + boto3 put_object are both synchronous; offload to a
+            # thread so the event loop isn't blocked for ~100ms-1s per embed.
+            await asyncio.to_thread(self._put_webp_sync, file_path, cdn_patj)
             return True, f"https://cdn.clyppy.io/{cdn_patj}"
         except Exception as e:
             self.logger.info(f"Error uploading {filename}: {str(e)}")
             return False, str(e)
+
+    def _put_webp_sync(self, file_path: str, cdn_path: str) -> None:
+        with open(file_path, 'rb') as file:
+            img_data = file.read()
+        self.client.put_object(
+            Bucket='clyppy',
+            Key=cdn_path,
+            Body=img_data,
+            ACL='public-read',
+            ContentType='image/webp'
+        )
 
     def put_video(self, file_path, filename, storage_type="temp", content_type="video/mp4") -> tuple[bool, str]:
         object_key = f"{storage_type}/{filename}"

@@ -744,49 +744,37 @@ class BaseClip(ABC):
     async def create_first_frame_webp(self, video_path: str, output_path: Optional[str | None] = None) -> str:
         """
         Creates a webp file from the first frame of an mp4 video.
-        
-        Args:
-            video_path: Path to the mp4 video file
-            output_path: Optional path for the resulting webp file. If not provided,
-                         will use the same location as the video with .webp extension
-        
-        Returns:
-            Path to the generated webp file
 
-        Raises:
-            FileNotFoundError: If the video file doesn't exist
-            Exception: If there's an error processing the video
+        MoviePy decoding and PIL encoding are CPU-bound and block the event
+        loop for hundreds of milliseconds — run them in a worker thread.
         """
+        if not os.path.exists(video_path):
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+
+        # Replace .mp4 extension with .webp
+        base_path = os.path.splitext(video_path)[0]
+        output_path = f"{base_path}.webp" if output_path is None else str(output_path)
+
+        self.logger.info(f"Extracting first frame from {video_path}")
         try:
-            if not os.path.exists(video_path):
-                raise FileNotFoundError(f"Video file not found: {video_path}")
-
-            # Replace .mp4 extension with .webp
-            base_path = os.path.splitext(video_path)[0]
-            output_path: str = f"{base_path}.webp" if output_path is None else str(output_path)
-
-            # Use MoviePy to get the first frame, disable audio processing and set target resolution
-            self.logger.info(f"Extracting first frame from {video_path}")
-            clip = VideoFileClip(video_path, audio=False, target_resolution=(None, 1080))
-
-            try:
-                # Get the first frame at t=0 (or slightly after to avoid potential issues with t=0)
-                frame = clip.get_frame(0)
-                
-                # Convert the numpy array to a PIL Image
-                img = Image.fromarray(frame)
-                
-                # Save the image as webp
-                img.save(output_path, 'webp', quality=85, method=6)
-                
-                self.logger.info(f"Successfully created webp thumbnail: {output_path}")
-                return output_path
-            finally:
-                clip.close()
-
+            await asyncio.to_thread(self._extract_first_frame_sync, video_path, output_path)
+            self.logger.info(f"Successfully created webp thumbnail: {output_path}")
+            return output_path
         except Exception as e:
             self.logger.error(f"Error creating webp thumbnail for {video_path}: {str(e)}")
             raise
+
+    @staticmethod
+    def _extract_first_frame_sync(video_path: str, output_path: str) -> None:
+        """Blocking helper: decode the first frame and write it out as a webp.
+        Always called from a worker thread via `asyncio.to_thread`."""
+        clip = VideoFileClip(video_path, audio=False, target_resolution=(None, 1080))
+        try:
+            frame = clip.get_frame(0)
+            img = Image.fromarray(frame)
+            img.save(output_path, 'webp', quality=85, method=6)
+        finally:
+            clip.close()
     
     @staticmethod
     def _generate_clyppy_id(input_str: str, length: int = None, low_collision=True) -> str:
