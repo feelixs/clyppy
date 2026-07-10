@@ -68,17 +68,27 @@ async def _resolve_via_providers(
                     logger.warning(f"insta provider {host} 3xx with no Location for {shortcode}")
                     continue
 
-                # Image-only posts redirect to a .jpg — but so do flaky providers
-                # serving the poster frame for a valid reel. Don't trust one
-                # provider's non-mp4 redirect; record it and try the next one.
+                # Non-mp4 redirects come in two flavors:
+                #  - an image file (.jpg/.webp/...) — evidence the post may be
+                #    image-only, BUT flaky providers also serve the poster frame
+                #    for valid reels, so it only counts if every provider agrees
+                #  - anything else (e.g. a bounce back to instagram.com's HTML
+                #    page) — pure provider failure, no content evidence at all
                 cdn_path = cdn_url.split("?", 1)[0].lower()
                 if not cdn_path.endswith(".mp4"):
-                    logger.info(
-                        f"insta provider {host} redirected to non-mp4 ({cdn_path[-60:]}) "
-                        f"— trying next provider before concluding no video"
-                    )
-                    saw_non_mp4 = True
-                    non_mp4_provider_url = provider_url
+                    if cdn_path.endswith(('.jpg', '.jpeg', '.png', '.webp', '.heic', '.gif')):
+                        logger.info(
+                            f"insta provider {host} redirected to image ({cdn_path[-60:]}) "
+                            f"— trying next provider before concluding no video"
+                        )
+                        saw_non_mp4 = True
+                        non_mp4_provider_url = provider_url
+                    else:
+                        logger.warning(
+                            f"insta provider {host} redirected to non-media URL "
+                            f"({cdn_url[:80]}) — treating as provider failure"
+                        )
+                        had_inconclusive = True
                     continue
 
                 logger.info(f"insta provider {host} resolved {shortcode} (status {response.status})")
