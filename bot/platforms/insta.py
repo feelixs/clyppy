@@ -31,10 +31,20 @@ async def _resolve_via_providers(
 
     Returns (provider_url, cdn_url, content_status) where content_status is:
       - "ok"       — got a usable mp4 CDN URL (cdn_url is set)
-      - "no_video" — provider says the post has no video (don't fall back)
+      - "no_video" — every provider redirected to a non-video (genuinely no video)
       - "exhausted" — all providers errored/timed out (cdn_url is None)
     """
     last_error_status = None
+    # A single provider redirecting to a .jpg is NOT proof the post has no
+    # video — providers intermittently serve the poster image for valid reels
+    # (flaky/rate-limited). Only trust "no video" if EVERY provider agrees, so
+    # remember non-mp4 redirects but keep falling back to the next provider.
+    saw_non_mp4 = False
+    non_mp4_provider_url = None
+    # Set whenever a provider gives an inconclusive result (error, timeout,
+    # missing Location). If any provider was inconclusive we can't be sure the
+    # post has no video, so we must not conclude "no_video".
+    had_inconclusive = False
     for host in _INSTA_PROVIDERS:
         provider_url = f"https://{host}/videos/{shortcode}/1"
         try:
@@ -46,6 +56,7 @@ async def _resolve_via_providers(
             ) as response:
                 if response.status not in (301, 302, 307, 308):
                     last_error_status = response.status
+                    had_inconclusive = True
                     logger.warning(
                         f"insta provider {host} returned {response.status} for {shortcode}"
                     )
@@ -53,32 +64,45 @@ async def _resolve_via_providers(
 
                 cdn_url = response.headers.get("Location")
                 if not cdn_url:
+                    had_inconclusive = True
                     logger.warning(f"insta provider {host} 3xx with no Location for {shortcode}")
                     continue
 
-                # Image-only posts redirect to a .jpg. That's a content fact, not
-                # a provider failure — falling back to another provider won't help.
+                # Image-only posts redirect to a .jpg — but so do flaky providers
+                # serving the poster frame for a valid reel. Don't trust one
+                # provider's non-mp4 redirect; record it and try the next one.
                 cdn_path = cdn_url.split("?", 1)[0].lower()
                 if not cdn_path.endswith(".mp4"):
                     logger.info(
                         f"insta provider {host} redirected to non-mp4 ({cdn_path[-60:]}) "
-                        f"— post has no video"
+                        f"— trying next provider before concluding no video"
                     )
-                    return provider_url, None, "no_video"
+                    saw_non_mp4 = True
+                    non_mp4_provider_url = provider_url
+                    continue
 
                 logger.info(f"insta provider {host} resolved {shortcode} (status {response.status})")
                 return provider_url, cdn_url, "ok"
 
         except asyncio.TimeoutError:
+            had_inconclusive = True
             logger.warning(f"insta provider {host} timed out for {shortcode}")
             continue
         except Exception as e:
+            had_inconclusive = True
             logger.warning(f"insta provider {host} errored for {shortcode}: {e}")
             continue
 
+    # Only conclude "no video" when every provider gave a definitive non-mp4
+    # redirect and none were inconclusive — otherwise a flaky provider serving
+    # the poster .jpg for a valid reel would falsely read as an image-only post.
+    if saw_non_mp4 and not had_inconclusive:
+        logger.info(f"insta: all providers redirected to non-mp4 for {shortcode} — post has no video")
+        return non_mp4_provider_url, None, "no_video"
+
     logger.error(
         f"insta: all {len(_INSTA_PROVIDERS)} providers failed for {shortcode} "
-        f"(last upstream status: {last_error_status})"
+        f"(last upstream status: {last_error_status}, saw_non_mp4: {saw_non_mp4})"
     )
     return None, None, "exhausted"
 
@@ -92,9 +116,11 @@ class InstagramMisc(BaseMisc):
 
     # Matches reels, posts (single photo/video or carousel), and IGTV.
     # Group 1 = path segment (reel|reels|p|tv), group 2 = shortcode.
-    # The app's share button produces the plural /reels/ form.
+    # The app's share button produces the plural /reels/ form, and
+    # account-context links insert a /{username}/ segment before the path
+    # (e.g. instagram.com/flxcproxy/reel/<shortcode>/).
     _URL_RE = re.compile(
-        r'(?:https?://)?(?:www\.)?instagram\.com/(reels?|p|tv)/([a-zA-Z0-9_-]+)(?:/|$|\?)'
+        r'(?:https?://)?(?:www\.)?instagram\.com/(?:[a-zA-Z0-9_.]+/)?(reels?|p|tv)/([a-zA-Z0-9_-]+)(?:/|$|\?)'
     )
 
     def parse_clip_url(self, url: str, extended_url_formats=False) -> Optional[str]:
