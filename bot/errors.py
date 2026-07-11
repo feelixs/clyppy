@@ -180,7 +180,12 @@ def handle_yt_dlp_err(err: str, file_path: str = None):
         or 'unable to download video data' in err  # CDN-level rejection
     ):
         raise YtDlpForbiddenError
-    elif 'HTTP Error 429' in err or '429: Too Many Requests' in err:
+    elif (
+        'HTTP Error 429' in err
+        or '429: Too Many Requests' in err
+        or "This content isn't available, try again later" in err  # YouTube per-account rate limit
+        or 'Your account has been rate-limited by YouTube' in err
+    ):
         raise RateLimitedByPlatformError
     elif 'Temporary failure in name resolution' in err or 'Name or service not known' in err:
         raise UrlUnparsable

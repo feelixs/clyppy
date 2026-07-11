@@ -54,3 +54,4 @@ class LocalFileInfo:
     filesize: float
     video_name: Optional[str]
     can_be_discord_uploaded: Optional[bool]
+    broadcaster_username: Optional[str] = None  # channel/creator name, populated during dl_download

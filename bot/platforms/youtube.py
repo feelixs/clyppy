@@ -1,11 +1,8 @@
 from bot.errors import InvalidClipType, VideoTooLong
 from bot.classes import BaseClip, BaseMisc
 from bot.types import DownloadResponse
-from bot.env import YT_DLP_USER_AGENT
 from bot.utils.rate_limiter import youtube_rate_limiter
-from yt_dlp import YoutubeDL
 from typing import Optional
-import asyncio
 import re
 
 
@@ -61,8 +58,6 @@ class YtClip(BaseClip):
         else:
             self._url = f"https://youtube.com/watch/?v={slug}"
         super().__init__(slug, cdn_client, tokens_used, duration)
-        self._broadcaster_username = None
-        self._cached_info = None
 
     @property
     def service(self) -> str:
@@ -75,10 +70,10 @@ class YtClip(BaseClip):
     async def download(self, filename=None, dlp_format='best/bv*+ba', can_send_files=False, cookies=True, extra_opts=False) -> DownloadResponse:
         self.logger.info(f"({self.id}) run dl_check_size(upload_if_large=True)...")
 
-        # Extract channel info first (rate limited)
-        await self._extract_clip_info()
-
-        # Rate limit before the main download
+        # Rate limit before the main download. Channel name is now piped
+        # through dl_check_size → LocalFileInfo → DownloadResponse from the
+        # post-download _extract_info call in dl_download, so we no longer
+        # need a separate rate-limited hit here for channel metadata.
         await youtube_rate_limiter.acquire()
         response = await super().dl_check_size(
             filename=filename,
@@ -89,32 +84,5 @@ class YtClip(BaseClip):
             prefetched_file=self._prefetched_file
         )
 
-        response.video_uploader_username = self._broadcaster_username
+        response.video_uploader_username = response.broadcaster_username
         return response
-
-    async def _extract_clip_info(self):
-        """Extract channel info from yt-dlp (cached to avoid rate limiting)"""
-        if self._cached_info is not None:
-            return
-
-        # Rate limit before extracting info
-        await youtube_rate_limiter.acquire()
-
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'skip_download': True,
-            'user_agent': YT_DLP_USER_AGENT
-        }
-
-        def extract():
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(self.url, download=False)
-                return info
-
-        try:
-            info = await asyncio.get_event_loop().run_in_executor(None, extract)
-            self._cached_info = info
-            self._broadcaster_username = info.get('channel')
-        except Exception as e:
-            self.logger.warning(f"Failed to extract clip info for {self.id}: {e}")

@@ -47,5 +47,7 @@ class RateLimiter:
 
 
 # Global rate limiters for different platforms
-# YouTube: 5 second delay between requests to avoid rate limiting
-youtube_rate_limiter = RateLimiter(delay_seconds=5.0, name="youtube")
+# YouTube: 12 second delay = ~300 requests/hour cap, safely under the
+# ~360/hour per-Google-account limit YouTube enforces on our cookies.
+# See https://github.com/yt-dlp/yt-dlp/wiki/Extractors#this-content-isnt-available-try-again-later
+youtube_rate_limiter = RateLimiter(delay_seconds=12.0, name="youtube")

@@ -454,7 +454,8 @@ class BaseClip(ABC):
                         height=format_info['height'],
                         video_name=info.get('title'),
                         can_be_discord_uploaded=None,
-                        clyppy_object_is_stored_as_redirect=False
+                        clyppy_object_is_stored_as_redirect=False,
+                        broadcaster_username=info.get('channel') or info.get('uploader'),
                     )
 
                 # Fall back to formats list if direct URL not available
@@ -483,7 +484,8 @@ class BaseClip(ABC):
                             height=format_info['height'],
                             video_name=info.get('title'),
                             can_be_discord_uploaded=None,
-                            clyppy_object_is_stored_as_redirect=False
+                            clyppy_object_is_stored_as_redirect=False,
+                            broadcaster_username=info.get('channel') or info.get('uploader'),
                         )
 
                 # If we get here, no suitable format was found
@@ -578,7 +580,8 @@ class BaseClip(ABC):
                     filesize=local.filesize,
                     video_name=local.video_name,
                     can_be_discord_uploaded=True,
-                    clyppy_object_is_stored_as_redirect=False
+                    clyppy_object_is_stored_as_redirect=False,
+                    broadcaster_username=local.broadcaster_username,
                 )
 
         if upload_if_large:
@@ -618,6 +621,7 @@ class BaseClip(ABC):
                     ydl_opts
                 )
                 d.video_name = extracted.video_name
+                d.broadcaster_username = extracted.broadcaster_username
                 if d.video_name:
                     self.title = d.video_name
             except Exception as e:
@@ -640,6 +644,7 @@ class BaseClip(ABC):
                 )
                 d = get_video_details(filename)
                 d.video_name = extracted.video_name
+                d.broadcaster_username = extracted.broadcaster_username
                 if d.video_name:
                     self.title = d.video_name
                 if is_discord_compatible(d.filesize) and can_send_files:
@@ -692,7 +697,8 @@ class BaseClip(ABC):
                 width=local_file_info.width,
                 video_name=local_file_info.video_name,
                 can_be_discord_uploaded=None,
-                clyppy_object_is_stored_as_redirect=False
+                clyppy_object_is_stored_as_redirect=False,
+                broadcaster_username=local_file_info.broadcaster_username,
             )
         else:
             self.logger.error(f"Failed to upload video: {remote_url}")
