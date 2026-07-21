@@ -1,11 +1,16 @@
-from interactions import Permissions, Embed, Message, Button, ButtonStyle, SlashContext, TYPE_THREAD_CHANNEL, ActionRow, MessageFlags, errors
+from interactions import (Permissions, Embed, Message, Button, ButtonStyle, SlashContext,
+                          TYPE_THREAD_CHANNEL, ActionRow, MessageFlags, errors)
+from interactions.api.events import MessageCreate
+
 from bot.errors import VideoTooLong, NoDuration, UnknownError, DefinitelyNoDuration, NSFWEmbed
 from bot.io import get_aiohttp_session, is_404, fetch_video_status, get_clip_info, subtract_tokens, push_interaction_error
-from datetime import datetime, timezone, timedelta
-from interactions.api.events import MessageCreate
-from bot.env import DL_SERVER_ID, DOWNLOAD_THIS_WEBHOOK_ID, POSSIBLE_EMBED_BUTTONS, is_contrib_instance, log_api_bypass, LOGGER_WEBHOOK_ID
+from bot.env import (DL_SERVER_ID, DOWNLOAD_THIS_WEBHOOK_ID, POSSIBLE_EMBED_BUTTONS, is_contrib_instance,
+                     log_api_bypass, LOGGER_WEBHOOK_ID, TOPGG_VOTE_LINK, TOPGG_REVIEW_LINK)
 from bot.types import DownloadResponse, LocalFileInfo, GuildType, DiscordAttachmentId
 from bot.task_queue import QuickembedTask
+from bot.tools.converter import ffprobe_video_metadata
+
+from datetime import datetime, timezone, timedelta
 from typing import List, Union, Tuple
 from pathlib import Path
 import traceback
@@ -13,7 +18,6 @@ import asyncio
 import time
 import re
 import os
-
 
 INVALID_VIEW_ON_PLATFORMS = ['discord']
 INVALID_DL_PLATFORMS = ['discord', 'rule34', 'base']
@@ -323,8 +327,6 @@ class AutoEmbedder:
 
             # Try to send the DM
             try:
-                from bot.env import TOPGG_VOTE_LINK, TOPGG_REVIEW_LINK
-                from interactions import ActionRow
                 msg = (f"**Welcome to Clyppy!** 🎬\n\n"
                        f"Thanks for using Clyppy to embed your clips! "
                        f"I will automatically embed links from certain platforms, if your server admin has setup `quickembeds` using my `/settings` command. "
@@ -588,7 +590,6 @@ class AutoEmbedder:
             # break backup proration math). Width/height are only patched in if they're also missing.
             if local_video_path and (not response.duration or response.duration == 0):
                 try:
-                    from bot.tools.converter import ffprobe_video_metadata
                     probed = await ffprobe_video_metadata(local_video_path)
                     if probed is not None:
                         if probed['duration'] > 0 and (not response.duration or response.duration == 0):

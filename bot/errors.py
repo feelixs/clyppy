@@ -133,6 +133,18 @@ class RateLimitedByPlatformError(Exception):
     pass
 
 
+class GeoRestrictedError(Exception):
+    """The uploader/platform restricts this video to specific countries and
+    the bot's server isn't in one of them"""
+    pass
+
+
+class DRMProtectedError(Exception):
+    """The site serves its video through DRM (Crunchyroll, Netflix, ...) —
+    yt-dlp will never support it"""
+    pass
+
+
 class RateLimitExceededError(Exception):
     def __init__(self, resets_when, *args):
         super().__init__(*args)
@@ -148,6 +160,18 @@ def handle_yt_dlp_err(err: str, file_path: str = None):
         raise VideoUnavailable
     elif 'This clip is no longer available' in err:
         raise VideoUnavailable
+    # Geo/DRM checks must run before the generic 'Video unavailable' match:
+    # YouTube phrases geo-locks as "Video unavailable. The uploader has not
+    # made this video available in your country".
+    elif (
+        'not made this video available in your country' in err  # YouTube uploader geo-lock
+        or 'due to geo restriction' in err  # yt-dlp generic GeoRestrictedError message
+        or 'not available in your country' in err
+        or 'geo-restricted' in err.lower()
+    ):
+        raise GeoRestrictedError
+    elif 'known to use DRM protection' in err or 'DRM protected' in err:
+        raise DRMProtectedError
     elif 'HTTP Error 404: Not Found' in err:
         raise VideoSaidUnavailable
     elif 'Video unavailable' in err:
@@ -189,6 +213,9 @@ def handle_yt_dlp_err(err: str, file_path: str = None):
         raise RateLimitedByPlatformError
     elif 'Temporary failure in name resolution' in err or 'Name or service not known' in err:
         raise UrlUnparsable
+    elif 'No host supplied' in err or "Invalid URL '" in err:
+        # requests/httpx RequestError for malformed URLs (e.g. "https:///...")
+        raise UrlUnparsable
     elif 'MoviePy error: failed to read the first frame of video file' in err:
         if file_path is not None:  # this can be raised after the file is partially downloaded
             try:
@@ -214,6 +241,10 @@ def friendly_yt_dlp_error_message(exception: Exception) -> str | None:
         return "The platform said my IP was blocked from viewing that link."
     if isinstance(exception, RateLimitedByPlatformError):
         return "The platform is rate-limiting me right now (429 Too Many Requests). Please try again in a few minutes."
+    if isinstance(exception, GeoRestrictedError):
+        return "The uploader has region-locked that video, and it isn't available in my server's country — so I can't fetch it."
+    if isinstance(exception, DRMProtectedError):
+        return "That site protects its videos with DRM (like Crunchyroll or Netflix), so they can't be downloaded or embedded."
     if isinstance(exception, YtDlpForbiddenError):
         return "I couldn't download that video file (Error 403 Forbidden). Maybe try again later, or use a different hosting website?"
     if isinstance(exception, VideoUnavailable):

@@ -1,24 +1,38 @@
-from datetime import datetime, timezone
-from bot.classes import BaseMisc, send_webhook, maybe_refresh_youtube_cookies
-from typing import Tuple, Optional
-from re import compile, search as re_search
-from random import choice as random_choice
+from interactions.api.events.discord import GuildJoin, GuildLeft, MessageCreate
 from interactions import (Extension, Embed, slash_command, SlashContext, SlashCommandOption, OptionType, listen,
                           Permissions, Task, IntervalTrigger, ComponentContext, Message, SlashCommandChoice,
                           component_callback, Button, ButtonStyle, Activity, ActivityType, TYPE_ALL_CHANNEL, GuildForum,
-                          GuildCategory, Member)
-from interactions.api.events.discord import GuildJoin, GuildLeft, MessageCreate
+                          GuildCategory, Member, ActionRow)
+
 from bot.env import (SUPPORT_SERVER_URL, MONTHLY_WINNER_CHANNEL_ID, MONTHLY_WINNER_TOKENS, POSSIBLE_ON_ERRORS,
                      POSSIBLE_EMBED_BUTTONS, APPUSE_LOG_WEBHOOK, VERSION, EMBED_TXT_COMMAND, BUY_TOKENS_URL, CLYPPY_VOTE_URL,
                      is_contrib_instance, log_api_bypass, CLYPPYBOT_ID)
 from bot.io import (get_clip_info, callback_clip_delete_msg, add_reqqed_by, subtract_tokens, refresh_clip,
-                    preview_backup, create_backup, register_download,
-                    log_guild_install, log_guild_left, log_guild_event)
+                    preview_backup, create_backup, register_download, get_token_cost, log_guild_event,
+                    log_guild_install, log_guild_left)
+from bot.env import (BUY_TOKENS_URL, CLYPPY_VOTE_URL, EMBED_TOKEN_COST, EMBED_W_TOKEN_MAX_LEN,
+                     EMBED_TOTAL_MAX_LENGTH, MAX_VIDEO_LEN_SEC)
+from bot.errors import friendly_yt_dlp_error_message, VideoTooLong, VideoLongerThanMaxLength
+from bot.classes import BaseMisc, send_webhook, maybe_refresh_youtube_cookies, tryremove
+from bot.platforms.clyppyio import ClyppyioMisc
+from bot.utils.pagination import ServerRankPagination, ServerRankPaginationState, UserRankPagination, UserRankPaginationState
+from bot.tools.converter import SUPPORTED_FORMATS, convert_media, AUDIO_FORMATS, ffprobe_video_metadata
+from bot.tools.embedder import publish_interaction
+from bot.task_queue import SlashCommandTask, process_queued_tasks
 from bot.types import COLOR_GREEN, COLOR_RED
-from bot.tools.converter import SUPPORTED_FORMATS
+from bot.db import VALID_QUICKEMBED_PLATFORMS
+from bot.io.io import fetch_previous_vote_winner
+
+from random import choice as random_choice
+from datetime import datetime, timezone
+from re import compile, search as re_search
+from typing import Tuple, Optional
+import traceback
 import logging
 import asyncio
 import aiohttp
+import json
+import base64
 import os
 
 
@@ -74,16 +88,23 @@ class Base(Extension):
             url = url[1:]
         while url.endswith('*') or url.endswith(']') or url.endswith('`') or url.endswith(')'):
             url = url[:-1]
+        if not url.startswith(("http://", "https://")):
+            # Users sometimes paste extra text around the link (e.g. the whole
+            # "/embed url: https://..." command into the url field). If a URL
+            # is embedded in the input, use it instead of prepending a scheme
+            # to text that isn't a hostname.
+            embedded = re_search(r'https?://\S+', url)
+            if embedded:
+                url = embedded.group(0)
+            else:
+                url = "https://" + url
         if url.startswith("http://"):
             url = "https://" + url[7:]  # Upgrade http to https
-        elif not url.startswith("https://"):
-            url = "https://" + url
         return url
 
     async def _resolve_clyppy_embed_link(self, url: str) -> Optional[str]:
         """If url is a clyppy.io/e/{id} link, resolve it to the original source URL.
         Returns the original embedded_url, or None if the clip wasn't found."""
-        from bot.platforms.clyppyio import ClyppyioMisc
         if not ClyppyioMisc.is_embed_link(url):
             return None
         clip_id = self.bot.clyppyio.parse_clip_url(url)
@@ -494,10 +515,6 @@ class Base(Extension):
         """Handle server ranking pagination button clicks."""
         await ctx.defer(edit_origin=True)
 
-        from bot.utils.pagination import ServerRankPagination, ServerRankPaginationState
-        import json
-        import base64
-
         # Parse custom_id: server_rank_{action}_{encoded_state}
         parts = ctx.custom_id.split("_", 3)
         action = parts[2]  # first, prev, next, last
@@ -556,8 +573,6 @@ class Base(Extension):
     async def user_rank_button(self, ctx: ComponentContext):
         """Handle user ranking pagination button clicks."""
         await ctx.defer(edit_origin=True)
-
-        from bot.utils.pagination import UserRankPagination, UserRankPaginationState
 
         # Parse compact custom_id: ur_{action}_{user_id}_{tp}_{page}_{total}_{bots}_{ts}
         parts = ctx.custom_id.split("_")
@@ -716,7 +731,6 @@ class Base(Extension):
             try:
                 # Interaction already deferred at the top of this function
 
-                from bot.task_queue import SlashCommandTask
                 task = SlashCommandTask(
                     interaction_id=int(ctx.id),
                     interaction_token=ctx.token,
@@ -733,13 +747,11 @@ class Base(Extension):
                 self.logger.info(f"Successfully queued task for {url}")
             except Exception as e:
                 self.logger.error(f"Failed to queue task during shutdown: {e}")
-                import traceback
                 self.logger.error(traceback.format_exc())
             # Don't send any response - the deferred state will be resumed on restart
             return
 
         # Clyppy /e/ links are already embedded — just resend the link
-        from bot.platforms.clyppyio import ClyppyioMisc
         if ClyppyioMisc.is_embed_link(url):
             await ctx.send(url)
             return
@@ -768,9 +780,6 @@ class Base(Extension):
 
         interaction_type: 'download' or 'giphify' — recorded on the BotInteraction row.
         """
-        from bot.tools.converter import SUPPORTED_FORMATS, convert_media, AUDIO_FORMATS, ffprobe_video_metadata
-        from bot.classes import tryremove
-
         platform = None
         slug = None
         for p in self.bot.platform_embedders:
@@ -881,7 +890,6 @@ class Base(Extension):
                 )
 
             try:
-                from bot.tools.embedder import publish_interaction
                 interaction_data = {
                     'edit': False,
                     'create_new_video': False,
@@ -924,7 +932,6 @@ class Base(Extension):
                     f"[/{interaction_type}] publish_interaction failed for {clip.clyppy_id}: {pub_err}"
                 )
 
-            from interactions import ActionRow
             buttons = ActionRow(
                 Button(style=ButtonStyle.LINK, label="Download", url=cdn_url),
                 Button(style=ButtonStyle.SUCCESS, label="Back it up", custom_id=f"dlbtn-backup-{ctx.author.id}-{clip.clyppy_id}"),
@@ -966,7 +973,6 @@ class Base(Extension):
         url = self._sanitize_url(url)
 
         # Resolve clyppy.io/e/ links to their original source URL for yt-dlp
-        from bot.platforms.clyppyio import ClyppyioMisc
         if ClyppyioMisc.is_embed_link(url):
             original_url = await self._resolve_clyppy_embed_link(url)
             if original_url:
@@ -979,7 +985,6 @@ class Base(Extension):
         if self.bot.is_shutting_down:
             self.logger.info(f"Bot is shutting down, queueing /giphify for {url}")
             try:
-                from bot.task_queue import SlashCommandTask
                 task = SlashCommandTask(
                     interaction_id=int(ctx.id),
                     interaction_token=ctx.token,
@@ -997,7 +1002,6 @@ class Base(Extension):
                 self.logger.info(f"Successfully queued giphify task for {url}")
             except Exception as e:
                 self.logger.error(f"Failed to queue giphify task during shutdown: {e}")
-                import traceback
                 self.logger.error(traceback.format_exc())
             return
 
@@ -1030,7 +1034,6 @@ class Base(Extension):
         file_ext = file_ext.lower().strip().lstrip('.')
 
         # Resolve clyppy.io/e/ links to their original source URL for yt-dlp
-        from bot.platforms.clyppyio import ClyppyioMisc
         if ClyppyioMisc.is_embed_link(url):
             original_url = await self._resolve_clyppy_embed_link(url)
             if original_url:
@@ -1040,7 +1043,6 @@ class Base(Extension):
                 await ctx.send("Could not find the original video for this clyppy link.")
                 return
 
-        from bot.tools.converter import SUPPORTED_FORMATS
         if file_ext not in SUPPORTED_FORMATS:
             await ctx.send(f"Unsupported format `{file_ext}`. Supported: {', '.join(SUPPORTED_FORMATS.keys())}")
             return
@@ -1048,7 +1050,6 @@ class Base(Extension):
         if self.bot.is_shutting_down:
             self.logger.info(f"Bot is shutting down, queueing /download for {url} -> {file_ext}")
             try:
-                from bot.task_queue import SlashCommandTask
                 task = SlashCommandTask(
                     interaction_id=int(ctx.id),
                     interaction_token=ctx.token,
@@ -1066,7 +1067,6 @@ class Base(Extension):
                 self.logger.info(f"Successfully queued download task for {url} -> {file_ext}")
             except Exception as e:
                 self.logger.error(f"Failed to queue download task during shutdown: {e}")
-                import traceback
                 self.logger.error(traceback.format_exc())
             return
 
@@ -1074,13 +1074,7 @@ class Base(Extension):
             await self._run_download_pipeline(ctx, url, file_ext)
         except Exception as e:
             self.logger.error(f"Error in /download: {e}")
-            import traceback
             self.logger.error(traceback.format_exc())
-
-            from bot.errors import friendly_yt_dlp_error_message, VideoTooLong, VideoLongerThanMaxLength
-            from bot.env import (BUY_TOKENS_URL, CLYPPY_VOTE_URL, SUPPORT_SERVER_URL,
-                                 EMBED_TOTAL_MAX_LENGTH, MAX_VIDEO_LEN_SEC, EMBED_W_TOKEN_MAX_LEN, EMBED_TOKEN_COST)
-            from bot.io import get_token_cost
             friendly = friendly_yt_dlp_error_message(e)
             if friendly is not None:
                 await ctx.send(friendly)
@@ -1163,9 +1157,8 @@ class Base(Extension):
         # Compute relative expiry for display
         expires_display = ""
         if expires_iso:
-            from datetime import datetime as _dt
             try:
-                expires_dt = _dt.fromisoformat(expires_iso.replace('Z', '+00:00'))
+                expires_dt = datetime.fromisoformat(expires_iso.replace('Z', '+00:00'))
                 expires_display = f"<t:{int(expires_dt.timestamp())}:R>"
             except Exception:
                 expires_display = expires_iso
@@ -1303,9 +1296,8 @@ class Base(Extension):
             else:
                 lines.append(f"Charged: `0` tokens (existing expiry covered the month).")
             if next_charge_at:
-                from datetime import datetime as _dt
                 try:
-                    dt = _dt.fromisoformat(next_charge_at.replace('Z', '+00:00'))
+                    dt = datetime.fromisoformat(next_charge_at.replace('Z', '+00:00'))
                     lines.append(f"Next charge: <t:{int(dt.timestamp())}:D>")
                 except Exception:
                     pass
@@ -1529,7 +1521,6 @@ class Base(Extension):
                 return
             self.bot.guild_settings.set_default_download_filetype(target_guild_id, default_download_filetype)
 
-        from bot.db import VALID_QUICKEMBED_PLATFORMS
         if not chosen_qe:
             qe_display = "none"
         elif set(chosen_qe) == set(VALID_QUICKEMBED_PLATFORMS):
@@ -1668,7 +1659,6 @@ class Base(Extension):
         self.logger.info("Monthly winner check triggered - it's the 1st of the month!")
 
         try:
-            from bot.io.io import fetch_previous_vote_winner
             data = await fetch_previous_vote_winner()
             if not data.get('success'):
                 self.logger.error(f"Failed to fetch previous vote winner: {data}")
@@ -1684,8 +1674,7 @@ class Base(Extension):
 
             # Parse month display
             try:
-                from datetime import datetime as dt
-                month_dt = dt.strptime(vote_month, '%Y-%m')
+                month_dt = datetime.strptime(vote_month, '%Y-%m')
                 month_display = month_dt.strftime('%B %Y')
             except Exception:
                 month_display = vote_month
@@ -1939,7 +1928,6 @@ class Base(Extension):
             self.bot.download_runner = self._run_download_pipeline
 
             # Process queued tasks from previous session
-            from bot.task_queue import process_queued_tasks
             try:
                 await process_queued_tasks(self.bot, self.bot.task_queue)
             except Exception as e:

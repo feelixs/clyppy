@@ -25,7 +25,8 @@ from bot.errors import (NoDuration, UnknownError, UploadFailed, NoPermsToView, V
                         IPBlockedError, VideoUnavailable, InvalidFileType, UnsupportedError, RemoteTimeoutError,
                         YtDlpForbiddenError, UrlUnparsable, VideoSaidUnavailable, DefinitelyNoDuration,
                         handle_yt_dlp_err, VideoTooShortForExtend, VideoTooLongForExtend, VideoExtensionFailed,
-                        VideoContainsNSFWContent, ExceptionHandled, RateLimitedByPlatformError)
+                        VideoContainsNSFWContent, ExceptionHandled, RateLimitedByPlatformError,
+                        GeoRestrictedError, DRMProtectedError)
 
 from urllib.parse import urlparse
 import hashlib
@@ -409,6 +410,15 @@ class BaseClip(ABC):
                 info = ydl.extract_info(self.url, download=False)
                 if not info:
                     raise ValueError("Could not extract video information")
+
+                # Multi-video posts (e.g. tweets with several videos) come back
+                # as a playlist wrapper with no top-level url/formats/duration.
+                # Unwrap to the selected entry (playlist_items narrows to one).
+                if 'entries' in info:
+                    entries = [e for e in info['entries'] if e]
+                    if not entries:
+                        raise ValueError("Playlist result contained no usable entries")
+                    info = entries[0]
 
                 # Get duration with fallback
                 duration = info.get('duration', 0)
@@ -884,6 +894,12 @@ class BaseMisc(ABC):
             def get_duration() -> Optional[Union[float, LocalFileInfo]]:
                 with YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=download)
+                    # Multi-video posts return a playlist wrapper whose
+                    # duration/filepath live on the entries, not the top level.
+                    # Unwrap to the selected entry (playlist_items narrows to one).
+                    if info and 'entries' in info:
+                        entries = [e for e in info['entries'] if e]
+                        info = entries[0] if entries else {}
                     if download:
                         # Handle different metadata structures
                         if 'filepath' in info:
@@ -1765,6 +1781,14 @@ class BaseAutoEmbed:
             success, response, err_handled = False, "RateLimited", True
             from bot.health import record_rate_limit
             record_rate_limit(platform_name)
+        except GeoRestrictedError:
+            response_msg = f"The uploader has region-locked that video, and it isn't available in my server's country — so I can't fetch it {get_random_face()}"
+            asyncio.create_task(ctx.send(response_msg, components=create_nexus_comps()))
+            success, response, err_handled = False, "GeoRestricted", True
+        except DRMProtectedError:
+            response_msg = f"That site protects its videos with DRM (like Crunchyroll or Netflix), so they can't be downloaded or embedded {get_random_face()}"
+            asyncio.create_task(ctx.send(response_msg, components=create_nexus_comps()))
+            success, response, err_handled = False, "DRMProtected", True
         except UnsupportedError:
             response_msg = f"Couldn't {'extend' if extend_with_ai else 'embed'} that url. That platform is not supported {get_random_face()}"
             asyncio.create_task(ctx.send(response_msg, components=create_nexus_comps()))
