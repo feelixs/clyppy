@@ -273,6 +273,70 @@ def maybe_refresh_youtube_cookies(master_path: str, logger) -> bool:
     return False
 
 
+async def upload_current_cookies_to_api(logger, timeout_seconds: float = 15.0) -> bool:
+    """Merge the current rotated YouTube cookies into the master and upload
+    to the API. Called on graceful shutdown so the next container start
+    picks up the freshest rotation state instead of resetting to whatever
+    was last manually merged.
+
+    Returns True on successful upload, False otherwise. Fails silently on
+    any error — a failed upload should never block shutdown.
+    """
+    master_path = os.getenv("COOKIE_FILE", "/tmp/cookies.txt")
+    api_key = os.getenv("clyppy_post_key")
+
+    if not api_key:
+        logger.warning("[shutdown_cookies] clyppy_post_key not set, skipping upload")
+        return False
+    if not os.path.exists(master_path):
+        logger.warning(f"[shutdown_cookies] master {master_path} missing, skipping upload")
+        return False
+    if not os.path.exists(YT_COOKIE_FILE):
+        logger.info(f"[shutdown_cookies] no {YT_COOKIE_FILE} yet, nothing to persist")
+        return False
+
+    try:
+        # Build the merged content: master minus stale YT/Google entries,
+        # plus everything from our rotated YT cookies file.
+        merged_lines = []
+        with open(master_path, 'r') as f:
+            for line in f:
+                if line.startswith('.youtube.com') or line.startswith('.google.com'):
+                    continue
+                merged_lines.append(line)
+        with open(YT_COOKIE_FILE, 'r') as f:
+            for line in f:
+                if line.startswith('#'):
+                    continue
+                merged_lines.append(line)
+        merged_content = ''.join(merged_lines)
+
+        # POST as multipart, mirroring what merge_yt_cookies.sh does
+        import aiohttp
+        form = aiohttp.FormData()
+        form.add_field('file', merged_content,
+                       filename='cookies.txt', content_type='text/plain')
+        timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                "https://felixcreations.com/api/cookies/upload",
+                headers={"X-API-Key": api_key},
+                data=form,
+            ) as resp:
+                if resp.status == 200:
+                    logger.info(f"[shutdown_cookies] uploaded rotated cookies ({len(merged_content)} bytes)")
+                    return True
+                body = await resp.text()
+                logger.warning(f"[shutdown_cookies] upload failed HTTP {resp.status}: {body[:200]}")
+                return False
+    except asyncio.TimeoutError:
+        logger.warning(f"[shutdown_cookies] upload timed out after {timeout_seconds}s")
+        return False
+    except Exception as e:
+        logger.error(f"[shutdown_cookies] unexpected error: {e}")
+        return False
+
+
 def fetch_cookies(opts, logger, url=None):
     try:
         # Enable EJS Challenge solver

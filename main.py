@@ -8,6 +8,7 @@ from bot.setup import init_misc
 from bot.io import get_aiohttp_session
 from bot.db import GuildDatabase
 from bot.io.cdn import CdnSpacesClient
+from bot.classes import upload_current_cookies_to_api
 
 # Type hints for dynamically-attached bot attributes (set in init_misc / main.py).
 # These are declared on Client so PyCharm/PyRight resolve `bot.<attr>` everywhere
@@ -265,6 +266,15 @@ async def save_state(bot):
         logger.info("Database saved successfully")
     except Exception as e:
         logger.error(f"Failed to save database: {e}")
+
+    # Persist rotated YouTube cookies back to the API so the next container
+    # start begins from the freshest rotation state, not the last manual
+    # export. Hard 15s timeout — a stuck API must never block shutdown.
+    try:
+        logger.info("Uploading rotated cookies...")
+        await upload_current_cookies_to_api(logger, timeout_seconds=15.0)
+    except Exception as e:
+        logger.error(f"Failed to upload cookies: {e}")
 
 
 async def main():
