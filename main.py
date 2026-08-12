@@ -408,7 +408,22 @@ finally:
         loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         # Shutdown async generators
         loop.run_until_complete(loop.shutdown_asyncgens())
-        # Shutdown default executor
-        loop.run_until_complete(loop.shutdown_default_executor())
+        # Shutdown default executor — bounded, because a stuck yt-dlp download
+        # thread (e.g. a live stream) can never be cancelled and would hold
+        # this (and interpreter shutdown) forever.
+        try:
+            loop.run_until_complete(asyncio.wait_for(loop.shutdown_default_executor(), timeout=10))
+        except (asyncio.TimeoutError, TimeoutError):
+            logger.warning("Executor threads still running after 10s (stuck download?) — forcing exit")
+    except Exception as e:
+        logger.error(f"Error during final loop cleanup: {e}")
     finally:
-        loop.close()
+        try:
+            loop.close()
+        except Exception:
+            pass
+        # State is already saved by this point. Non-daemon executor threads
+        # would block normal interpreter exit (threading joins them), so
+        # hard-exit to guarantee the container actually stops.
+        logging.shutdown()
+        os._exit(0)

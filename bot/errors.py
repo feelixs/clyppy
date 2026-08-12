@@ -145,6 +145,13 @@ class DRMProtectedError(Exception):
     pass
 
 
+class LiveStreamNotSupported(Exception):
+    """The URL points at a live/ongoing stream. Downloading one never
+    terminates (it would also hold a non-daemon executor thread open and
+    block process exit), so reject before any download starts."""
+    pass
+
+
 class RateLimitExceededError(Exception):
     def __init__(self, resets_when, *args):
         super().__init__(*args)
@@ -172,6 +179,12 @@ def handle_yt_dlp_err(err: str, file_path: str = None):
         raise GeoRestrictedError
     elif 'known to use DRM protection' in err or 'DRM protected' in err:
         raise DRMProtectedError
+    elif (
+        'This live event will begin in' in err  # YouTube scheduled premiere
+        or 'Premieres in' in err
+        or 'The channel is not currently live' in err  # twitch.tv/{channel} while offline
+    ):
+        raise LiveStreamNotSupported
     elif 'HTTP Error 404: Not Found' in err:
         raise VideoSaidUnavailable
     elif 'Video unavailable' in err:
@@ -245,6 +258,8 @@ def friendly_yt_dlp_error_message(exception: Exception) -> str | None:
         return "The uploader has region-locked that video, and it isn't available in my server's country — so I can't fetch it."
     if isinstance(exception, DRMProtectedError):
         return "That site protects its videos with DRM (like Crunchyroll or Netflix), so they can't be downloaded or embedded."
+    if isinstance(exception, LiveStreamNotSupported):
+        return "That looks like a live stream or channel page — I can only embed finished videos (clips, VODs, uploads)."
     if isinstance(exception, YtDlpForbiddenError):
         return "I couldn't download that video file (Error 403 Forbidden). Maybe try again later, or use a different hosting website?"
     if isinstance(exception, VideoUnavailable):

@@ -1,6 +1,7 @@
 from bot.errors import InvalidClipType, VideoTooLong
 from bot.classes import BaseClip, BaseMisc
 from bot.types import DownloadResponse
+from bot.env import YOUTUBE_EXTRACTOR_ARGS
 from bot.utils.rate_limiter import youtube_rate_limiter
 from typing import Optional
 import re
@@ -40,7 +41,8 @@ class YtMisc(BaseMisc):
         valid, tokens_used, duration = await self.is_shortform(
             url=url,
             basemsg=basemsg,
-            cookies=cookies
+            cookies=cookies,
+            extra_opts=YOUTUBE_EXTRACTOR_ARGS
         )
         if not valid:
             self.logger.info(f"{url} is_shortform=False")
@@ -67,7 +69,7 @@ class YtClip(BaseClip):
     def url(self) -> str:
         return self._url
 
-    async def download(self, filename=None, dlp_format='best/bv*+ba', can_send_files=False, cookies=True, extra_opts=False) -> DownloadResponse:
+    async def download(self, filename=None, dlp_format='best/bv*+ba', can_send_files=False, cookies=True, extra_opts=None) -> DownloadResponse:
         self.logger.info(f"({self.id}) run dl_check_size(upload_if_large=True)...")
 
         # Rate limit before the main download. Channel name is now piped
@@ -81,8 +83,20 @@ class YtClip(BaseClip):
             can_send_files=can_send_files,
             cookies=cookies,
             upload_if_large=True,
-            prefetched_file=self._prefetched_file
+            prefetched_file=self._prefetched_file,
+            extra_opts={**YOUTUBE_EXTRACTOR_ARGS, **(extra_opts or {})}
         )
 
         response.video_uploader_username = response.broadcaster_username
         return response
+
+    async def dl_download(self, filename=None, dlp_format='best/bv*+ba', can_send_files=False, cookies=False, extra_opts=None):
+        # /download and AI-extend call dl_download directly (bypassing
+        # download()), so inject the player_client args here too.
+        return await super().dl_download(
+            filename=filename,
+            dlp_format=dlp_format,
+            can_send_files=can_send_files,
+            cookies=cookies,
+            extra_opts={**YOUTUBE_EXTRACTOR_ARGS, **(extra_opts or {})}
+        )

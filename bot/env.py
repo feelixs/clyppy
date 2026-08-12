@@ -32,6 +32,14 @@ YT_DLP_MAX_FILESIZE = 1610612736 * 4  # 6GB in bytes (1.5 * 1024 * 1024 * 1024 *
 
 YT_DLP_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0"
 
+# With cookies, yt-dlp defaults to YouTube's tv_downgraded player client, which
+# YouTube currently serves "The page needs to be reloaded" instead of formats
+# (yt-dlp#17389). Steer to working clients; don't force mweb — it 403s due to a
+# separate PO-token issue (yt-dlp#17368).
+YOUTUBE_EXTRACTOR_ARGS = {
+    'extractor_args': {'youtube': {'player_client': ['default', 'web_embedded']}}
+}
+
 EMBED_TXT_COMMAND = ".embed"
 
 LOGGER_WEBHOOK = os.getenv('LOG_WEBHOOK')

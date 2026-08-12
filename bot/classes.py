@@ -26,7 +26,7 @@ from bot.errors import (NoDuration, UnknownError, UploadFailed, NoPermsToView, V
                         YtDlpForbiddenError, UrlUnparsable, VideoSaidUnavailable, DefinitelyNoDuration,
                         handle_yt_dlp_err, VideoTooShortForExtend, VideoTooLongForExtend, VideoExtensionFailed,
                         VideoContainsNSFWContent, ExceptionHandled, RateLimitedByPlatformError,
-                        GeoRestrictedError, DRMProtectedError)
+                        GeoRestrictedError, DRMProtectedError, LiveStreamNotSupported)
 
 from urllib.parse import urlparse
 import hashlib
@@ -964,6 +964,12 @@ class BaseMisc(ABC):
                     if info and 'entries' in info:
                         entries = [e for e in info['entries'] if e]
                         info = entries[0] if entries else {}
+                    # Live streams have no duration, which would otherwise fall
+                    # into the download-to-verify path — and downloading a live
+                    # stream never terminates (the executor thread can't be
+                    # cancelled and blocks process exit). Reject up front.
+                    if info and (info.get('is_live') or info.get('live_status') in ('is_live', 'is_upcoming')):
+                        raise LiveStreamNotSupported
                     if download:
                         # Handle different metadata structures
                         if 'filepath' in info:
@@ -1853,6 +1859,10 @@ class BaseAutoEmbed:
             response_msg = f"That site protects its videos with DRM (like Crunchyroll or Netflix), so they can't be downloaded or embedded {get_random_face()}"
             asyncio.create_task(ctx.send(response_msg, components=create_nexus_comps()))
             success, response, err_handled = False, "DRMProtected", True
+        except LiveStreamNotSupported:
+            response_msg = f"That looks like a live stream or channel page — I can only embed finished videos (clips, VODs, uploads) {get_random_face()}"
+            asyncio.create_task(ctx.send(response_msg, components=create_nexus_comps()))
+            success, response, err_handled = False, "LiveStream", True
         except UnsupportedError:
             response_msg = f"Couldn't {'extend' if extend_with_ai else 'embed'} that url. That platform is not supported {get_random_face()}"
             asyncio.create_task(ctx.send(response_msg, components=create_nexus_comps()))

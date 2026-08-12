@@ -33,6 +33,7 @@ import asyncio
 import aiohttp
 import json
 import base64
+import time
 import os
 
 
@@ -70,6 +71,7 @@ class Base(Extension):
         self._status_cycle_idx = 0
         self.monthly_winner_task = Task(self.check_monthly_winner, IntervalTrigger(seconds=60 * 60))  # check every hour
         self.last_winner_month = None
+        self._last_discordforge_post = float('-inf')  # discordforge.org allows 1 stats post / 5 min
         self.base_embedder = self.bot.base_embedder.embedder
 
     @staticmethod
@@ -2006,7 +2008,10 @@ class Base(Extension):
         try:
             if not dft:
                 self.logger.info("DISCORDFORGE_TOKEN env var unset, skipping stats post")
+            elif (since_last := time.monotonic() - self._last_discordforge_post) < 300:
+                self.logger.info(f"Skipping discordforge.org stats post (last one {since_last:.0f}s ago, limit is 1/5min)")
             else:
+                self._last_discordforge_post = time.monotonic()
                 async with aiohttp.ClientSession() as session:
                     async with session.post(
                             url="https://discordforge.org/api/bots/stats",
