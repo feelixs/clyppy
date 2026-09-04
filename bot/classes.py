@@ -26,7 +26,8 @@ from bot.errors import (NoDuration, UnknownError, UploadFailed, NoPermsToView, V
                         YtDlpForbiddenError, UrlUnparsable, VideoSaidUnavailable, DefinitelyNoDuration,
                         handle_yt_dlp_err, VideoTooShortForExtend, VideoTooLongForExtend, VideoExtensionFailed,
                         VideoContainsNSFWContent, ExceptionHandled, RateLimitedByPlatformError,
-                        GeoRestrictedError, DRMProtectedError, LiveStreamNotSupported)
+                        GeoRestrictedError, DRMProtectedError, LiveStreamNotSupported,
+                        LoginRequiredError)
 
 from urllib.parse import urlparse
 import hashlib
@@ -1788,13 +1789,14 @@ class BaseAutoEmbed:
         success, response, err_handled = False, "Timeout reached", False
         clip = None
         try:
-            if isinstance(ctx, SlashContext):
-                self.embedder.platform_tools = platform  # if called from /embed, the self.embedder is 'base'
-            elif isinstance(ctx, Message):
+            if isinstance(ctx, Message):
                 # for logging response times - it hasn't been set up for slash commands yet
                 self.embedder.clip_id_msg_timestamps[ctx.id] = datetime.now().timestamp()
 
-            clip = await self.embedder.platform_tools.get_clip(url, extended_url_formats=True, basemsg=ctx)
+            # use the platform passed in for this call — never stash it on the shared
+            # 'base' embedder (concurrent /embed calls would overwrite each other's
+            # platform mid-pipeline and publish clips under the wrong service)
+            clip = await platform.get_clip(url, extended_url_formats=True, basemsg=ctx)
             if extend_with_ai:
                 can_extend, tokens_used, user_tokens = await author_has_enough_tokens_for_ai_extend(ctx, clip.url)
                 if not can_extend:
@@ -1814,7 +1816,8 @@ class BaseAutoEmbed:
                 respond_to=ctx,
                 guild=guild,
                 try_send_files=True,
-                extend_with_ai=extend_with_ai
+                extend_with_ai=extend_with_ai,
+                platform=platform
             )
             success, response = True, "Success"
         except FileNotFoundError:  # ytdlp failed to download the file, but the output wasn't captured
@@ -1851,6 +1854,10 @@ class BaseAutoEmbed:
             success, response, err_handled = False, "RateLimited", True
             from bot.health import record_rate_limit
             record_rate_limit(platform_name)
+        except LoginRequiredError:
+            response_msg = f"That post appears to be private or login-required, so I can't fetch it {get_random_face()}"
+            asyncio.create_task(ctx.send(response_msg, components=create_nexus_comps()))
+            success, response, err_handled = False, "LoginRequired", True
         except GeoRestrictedError:
             response_msg = f"The uploader has region-locked that video, and it isn't available in my server's country — so I can't fetch it {get_random_face()}"
             asyncio.create_task(ctx.send(response_msg, components=create_nexus_comps()))

@@ -1403,14 +1403,17 @@ class Base(Extension):
                            required=False
                        ),
                        SlashCommandOption(
-                           name="auto_delete",
+                           # user-facing name is embed_format; stored internally as the
+                           # legacy 'auto_delete' setting ('true'/'false'/'embeds'/'channel')
+                           name="embed_format",
                            type=OptionType.STRING,
-                           description="What Clyppy does with the parent message after embedding",
+                           description="How Clyppy sends embeds and what it does with the parent message",
                            required=False,
                            choices=[
-                               SlashCommandChoice(name="true (delete the parent message)", value="true"),
-                               SlashCommandChoice(name="false (leave parent message as-is)", value="false"),
-                               SlashCommandChoice(name="embeds (suppress embeds on parent message)", value="embeds"),
+                               SlashCommandChoice(name="delete parent message", value="true"),
+                               SlashCommandChoice(name="reply to parent message", value="false"),
+                               SlashCommandChoice(name="reply to parent message & suppress discord native embeds", value="embeds"),
+                               SlashCommandChoice(name="send in channel (do not reply)", value="channel"),
                            ]
                        ),
                        SlashCommandOption(
@@ -1422,8 +1425,10 @@ class Base(Extension):
                        )
                    ])
     async def settings(self, ctx: SlashContext, quickembeds: str = None, channel = None,
-                       on_error: str = None, embed_buttons: str = None, auto_delete: str = None,
+                       on_error: str = None, embed_buttons: str = None, embed_format: str = None,
                        default_download_filetype: str = None):
+        # embed_format is the user-facing name for the internal auto_delete setting
+        auto_delete = embed_format
         await ctx.defer()
         if ctx.guild is None:
             await ctx.send("This command is only available in servers.")
@@ -1507,9 +1512,9 @@ class Base(Extension):
             auto_delete = self.bot.guild_settings.get_auto_delete(target_guild_id)
         else:
             auto_delete = auto_delete.strip().lower()
-            if auto_delete not in ('true', 'false', 'embeds'):
-                await ctx.send(f"Option '{auto_delete}' not a valid **auto_delete** setting!\n"
-                               f"Must be one of `true`, `false`, `embeds`")
+            if auto_delete not in ('true', 'false', 'embeds', 'channel'):
+                await ctx.send(f"Option '{auto_delete}' not a valid **embed_format** setting!\n"
+                               f"Must be one of `true`, `false`, `embeds`, `channel`")
                 return
             self.bot.guild_settings.set_auto_delete(target_guild_id, auto_delete)
 
@@ -1536,7 +1541,7 @@ class Base(Extension):
             f"**quickembeds**: {qe_display}{' (default)' if qe_is_default else ''}{qe_scope_msg}\n"
             f"**on_error**: {on_error}\n"
             f"**embed_buttons**: {embed_buttons}\n"
-            f"**auto_delete**: {auto_delete}\n"
+            f"**embed_format**: {auto_delete}\n"
             f"**default_download_filetype**: {default_download_filetype}\n\n"
         )
         if log:
@@ -1547,7 +1552,7 @@ class Base(Extension):
                      f"**quickembeds**: {qe_display}\n"
                      f"**on_error**: {on_error}\n"
                      f"**embed_buttons**: {embed_buttons}\n"
-                     f"**auto_delete**: {auto_delete}\n"
+                     f"**embed_format**: {auto_delete}\n"
                      f"**default_download_filetype**: {default_download_filetype}\n\n",
                 color=COLOR_GREEN,
                 url=APPUSE_LOG_WEBHOOK,
@@ -1615,15 +1620,16 @@ class Base(Extension):
             ' - `view`: A button to the original clip.\n'
             ' - `dl`: A button to download the original video file (on compatible clips).\n'
             ' - `all`: Shows all available buttons.\n\n'
-            '**auto_delete** What Clyppy does with the parent message after embedding:\n'
+            '**embed_format** How Clyppy sends embeds and what it does with the parent message:\n'
             ' - `true`: Delete the parent message after embedding.\n'
-            ' - `false`: Leave the parent message as-is.\n'
-            ' - `embeds`: Suppress embeds on the parent message (requires Manage Messages permission).\n\n'
+            ' - `false`: Reply to the parent message, leaving it as-is.\n'
+            ' - `embeds`: Reply to the parent message & suppress its native Discord embeds (requires Manage Messages permission).\n'
+            ' - `channel`: Send in the channel without replying to the parent message.\n\n'
             '**default_download_filetype** Default output format for `/download` when no `file_ext` is given:\n'
             f' - One of: `{", ".join(SUPPORTED_FORMATS.keys())}`\n\n'
             f'**Current Settings:**\n**quickembeds** (server-wide): {qe}{" (default)" if qe_is_default else ""}'
             f'{channel_overrides_section}\n{cs}\n**embed_buttons**: {es}\n'
-            f'**auto_delete**: {auto_delete}\n'
+            f'**embed_format**: {auto_delete}\n'
             f'**default_download_filetype**: {default_download_filetype}\n\n'
             f'Something missing? Please **[Suggest a Feature]({SUPPORT_SERVER_URL})**'
         )

@@ -133,6 +133,13 @@ class RateLimitedByPlatformError(Exception):
     pass
 
 
+class LoginRequiredError(Exception):
+    """The post exists but the platform only serves it to logged-in users,
+    so anonymous resolvers (fixer providers, yt-dlp without cookies) can
+    never fetch it — retrying won't help."""
+    pass
+
+
 class GeoRestrictedError(Exception):
     """The uploader/platform restricts this video to specific countries and
     the bot's server isn't in one of them"""
@@ -256,6 +263,8 @@ def friendly_yt_dlp_error_message(exception: Exception) -> str | None:
         return "The platform is rate-limiting me right now (429 Too Many Requests). Please try again in a few minutes."
     if isinstance(exception, GeoRestrictedError):
         return "The uploader has region-locked that video, and it isn't available in my server's country — so I can't fetch it."
+    if isinstance(exception, LoginRequiredError):
+        return "That post appears to be private or login-required, so I can't fetch it."
     if isinstance(exception, DRMProtectedError):
         return "That site protects its videos with DRM (like Crunchyroll or Netflix), so they can't be downloaded or embedded."
     if isinstance(exception, LiveStreamNotSupported):

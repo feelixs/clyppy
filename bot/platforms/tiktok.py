@@ -101,20 +101,27 @@ class TikTokMisc(BaseMisc):
         return None
 
     async def _resolve_url(self, shorturl) -> Tuple[str, str, str]:
-        # retrieve actual url
+        # retrieve actual url — the short link 302s to the canonical
+        # /@user/video/{id} URL, so read the id off the final URL. (The old
+        # approach grepped the page HTML for a "canonical" JSON key, which
+        # TikTok removed from their markup — every short link then failed
+        # with "not a video post".)
         self.logger.info(f'Retrieving actual url from shortened url {shorturl}')
+        canonical = re.compile(r'tiktok\.com/@([\w.-]+)/video/(\d+)')
         async with ClientSession() as session:
-            async with session.get(shorturl) as response:
-                v = r'"canonical":"https:\\u002F\\u002Fwww\.tiktok\.com\\u002F@([\w.]+)\\u002Fvideo\\u002F(\d+)"'
-                txt = await response.text()
-                match = re.search(v, txt)
+            async with session.get(shorturl, headers={"User-Agent": _DISCORD_UA}) as response:
+                match = canonical.search(str(response.url))
                 if match is None:
-                    self.logger.info(f"(video) Invalid TikTok URL: {shorturl} (match was None)")
+                    match = canonical.search(await response.text())
+                if match is None:
+                    self.logger.info(
+                        f"(video) Invalid TikTok URL: {shorturl} "
+                        f"(no canonical video id, final url: {str(response.url)[:120]})"
+                    )
                     raise NoDuration
-                else:
-                    user = match.group(1)
-                    video_id = match.group(2)
-                    return f"https://www.tiktok.com/@{user}/video/{video_id}", video_id, user
+                user = match.group(1)
+                video_id = match.group(2)
+                return f"https://www.tiktok.com/@{user}/video/{video_id}", video_id, user
 
     async def get_clip(self, url: str, extended_url_formats=False, basemsg=None, cookies=False) -> 'TikTokClip':
         video_id = self.parse_clip_url(url)

@@ -238,6 +238,9 @@ class GuildDatabase:
             return False
 
     def get_auto_delete(self, guild_id) -> str:
+        # user-facing name for this setting is "embed_format" (the table/method names
+        # predate the rename). Values: 'true' (delete parent), 'false' (reply),
+        # 'embeds' (reply + suppress native embeds), 'channel' (send without replying)
         try:
             with self.get_db() as conn:
                 cursor = conn.execute(

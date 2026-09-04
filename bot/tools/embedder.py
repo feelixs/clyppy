@@ -357,8 +357,12 @@ class AutoEmbedder:
             self, clip: 'BaseClip',
             clip_link: str, respond_to: Union[Message, SlashContext],
             guild: GuildType, try_send_files = True,
-            extend_with_ai = False
+            extend_with_ai = False, platform=None
     ) -> None:
+        # platform: the BaseMisc that resolved this clip. /embed runs through the shared
+        # 'base' embedder, so it MUST be passed explicitly — reading self.platform_tools
+        # late in the pipeline raced with concurrent /embed calls swapping it (a youtube
+        # clip could get published with service='pornhub', etc.)
         # get_clip will have used the VIP tokens if they were needed for this clip
         try:
             await self._process_clip(
@@ -367,7 +371,8 @@ class AutoEmbedder:
                 respond_to=respond_to,
                 guild=guild,
                 try_send_files=try_send_files,
-                extend_with_ai=extend_with_ai
+                extend_with_ai=extend_with_ai,
+                platform=platform
             )
         except Exception as e:
             # this is where we refund the tokens
@@ -398,7 +403,11 @@ class AutoEmbedder:
             self,
             clip: 'BaseClip', clip_link: str,
             respond_to: Union[Message, SlashContext], guild: GuildType,
-            try_send_files=True, extend_with_ai=False):
+            try_send_files=True, extend_with_ai=False, platform=None):
+        # resolve the platform once, up front — never read self.platform_tools later in
+        # this coroutine (it's shared mutable state on the 'base' embedder, see
+        # process_clip_link)
+        platform_tools = platform if platform is not None else self.platform_tools
         if guild.is_dm:  # dm gives error (nonetype has no attribute 'permissions_for')
             has_file_perms = True
         elif getattr(respond_to, '_restored_task', False):
@@ -481,17 +490,17 @@ class AutoEmbedder:
         try:
             comp = []
             # refer to: ["all", "view", "dl", "none"]
-            if self.platform_tools.platform_name.lower() in INVALID_VIEW_ON_PLATFORMS:
+            if platform_tools.platform_name.lower() in INVALID_VIEW_ON_PLATFORMS:
                 btn_idx = 2
             else:
                 btn_idx = self.bot.guild_settings.get_embed_buttons(guild.id)
             if btn_idx <= 1:
                 comp.append(Button(
                     style=ButtonStyle.LINK,
-                    label=f"View On {self.platform_tools.platform_name}" if self.platform_tools.platform_name != "base" else "View Source",
+                    label=f"View On {platform_tools.platform_name}" if platform_tools.platform_name != "base" else "View Source",
                     url=clip.url if clip.share_url is None else clip.share_url
                 ))
-            if (btn_idx == 0 or btn_idx == 2) and self.platform_tools.platform_name.lower() not in INVALID_DL_PLATFORMS:
+            if (btn_idx == 0 or btn_idx == 2) and platform_tools.platform_name.lower() not in INVALID_DL_PLATFORMS:
                 comp.append(Button(
                     style=ButtonStyle.SECONDARY,
                     label="Download",
@@ -629,7 +638,7 @@ class AutoEmbedder:
                 'remote_file_url': response.remote_url,
                 'remote_video_height': response.height,
                 'remote_video_width': response.width,
-                'url_platform': self.platform_tools.platform_name,
+                'url_platform': platform_tools.platform_name,
                 'response_time_seconds': 0,
                 'total_servers_now': len(self.bot.guilds),
                 'generated_id': clip.clyppy_id,
@@ -687,6 +696,7 @@ class AutoEmbedder:
 
                 # send message
                 # Check if it's a SlashContext (or MinimalContext with send method)
+                # the "embed_format" setting (user-facing name); internal name predates the rename
                 auto_delete_mode = self.bot.guild_settings.get_auto_delete(guild.id)
                 if isinstance(respond_to, SlashContext) or (hasattr(respond_to, 'send') and not hasattr(respond_to, 'reply')):
                     # slash command
@@ -694,6 +704,13 @@ class AutoEmbedder:
                         bot_message = await respond_to.send(file=response.local_file_path, components=comp)
                     else:
                         bot_message = await respond_to.send(clip.clyppy_url, components=comp)
+                elif auto_delete_mode == 'channel':
+                    # embed_format "send in channel (do not reply)" — post the embed in the
+                    # channel with no reply and no mention, leaving the parent message untouched
+                    if uploading_to_discord:
+                        bot_message = await respond_to.channel.send(file=response.local_file_path, components=comp)
+                    else:
+                        bot_message = await respond_to.channel.send(clip.clyppy_url, components=comp)
                 else:
                     # message
                     msg_content = f'<@!{respond_to.author.id}> ' if auto_delete_mode == 'true' else ''
