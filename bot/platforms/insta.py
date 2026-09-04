@@ -4,7 +4,7 @@ import asyncio
 import aiohttp
 import aiofiles
 from bot.classes import BaseClip, BaseMisc, get_video_details, is_discord_compatible
-from bot.errors import VideoTooLong, NoDuration, RemoteTimeoutError
+from bot.errors import VideoTooLong, NoDuration, RemoteTimeoutError, LoginRequiredError
 from bot.types import DownloadResponse, LocalFileInfo
 from typing import Optional, Tuple
 
@@ -32,6 +32,9 @@ async def _resolve_via_providers(
     Returns (provider_url, cdn_url, content_status) where content_status is:
       - "ok"       — got a usable mp4 CDN URL (cdn_url is set)
       - "no_video" — every provider redirected to a non-video (genuinely no video)
+      - "login_required" — a provider bounced back to the instagram.com page:
+        the post exists but isn't served to anonymous clients (private /
+        login-gated), so no provider can ever fetch it
       - "exhausted" — all providers errored/timed out (cdn_url is None)
     """
     last_error_status = None
@@ -45,6 +48,10 @@ async def _resolve_via_providers(
     # missing Location). If any provider was inconclusive we can't be sure the
     # post has no video, so we must not conclude "no_video".
     had_inconclusive = False
+    # A provider 302ing back to an instagram.com page URL means it reached the
+    # post but couldn't extract media — the signature of a private/login-gated
+    # post (anonymous scrapers get served the login wall, not the video).
+    saw_instagram_bounce = False
     for host in _INSTA_PROVIDERS:
         provider_url = f"https://{host}/videos/{shortcode}/1"
         try:
@@ -83,6 +90,12 @@ async def _resolve_via_providers(
                         )
                         saw_non_mp4 = True
                         non_mp4_provider_url = provider_url
+                    elif re.match(r'https?://(www\.)?instagram\.com/', cdn_url):
+                        logger.info(
+                            f"insta provider {host} bounced back to instagram.com "
+                            f"({cdn_url[:80]}) — post is likely private/login-gated"
+                        )
+                        saw_instagram_bounce = True
                     else:
                         logger.warning(
                             f"insta provider {host} redirected to non-media URL "
@@ -106,9 +119,13 @@ async def _resolve_via_providers(
     # Only conclude "no video" when every provider gave a definitive non-mp4
     # redirect and none were inconclusive — otherwise a flaky provider serving
     # the poster .jpg for a valid reel would falsely read as an image-only post.
-    if saw_non_mp4 and not had_inconclusive:
+    if saw_non_mp4 and not had_inconclusive and not saw_instagram_bounce:
         logger.info(f"insta: all providers redirected to non-mp4 for {shortcode} — post has no video")
         return non_mp4_provider_url, None, "no_video"
+
+    if saw_instagram_bounce:
+        logger.info(f"insta: provider(s) bounced back to instagram.com for {shortcode} — treating as login-required")
+        return None, None, "login_required"
 
     logger.error(
         f"insta: all {len(_INSTA_PROVIDERS)} providers failed for {shortcode} "
@@ -194,6 +211,10 @@ class InstagramClip(BaseClip):
         if status == "no_video":
             self.logger.error(f"({self.id}) Instagram post has no video — bailing")
             raise NoDuration
+
+        if status == "login_required":
+            self.logger.error(f"({self.id}) Instagram post is private/login-gated — bailing")
+            raise LoginRequiredError
 
         if status != "ok" or not provider_url:
             # All fixer services are down/erroring. Distinct from "post has no video"
