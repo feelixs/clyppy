@@ -88,6 +88,8 @@ To self-host, follow the Installation steps below — the only required variable
    CONTRIB_INSTANCE=1
    ```
 
+   For the discord token, you must create a new personal discord bot at https://discord.com/developers/applications and then copy its Token in the 'Bot' tab after clicking 'Reset'
+
 5. **Run the bot:**
    ```bash
    Docker build -t clyppybot .
