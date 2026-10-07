@@ -72,15 +72,16 @@ To self-host, follow the Installation steps below — the only required variable
    cd clyppybot
    ```
 
-2. **Install Python dependencies:**
+2. **(Optional) Install Python dependencies:**
+   This step will be done during docker build, but run this for development purposes, ideally in a virtual environment.
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Install Docker:**
+4. **Install Docker:**
    - Follow the online instructions depending on your OS
 
-4. **Set up environment variables:**
+5. **Set up environment variables:**
 
    Copy `.env.example` into a new `.env` file 
    ```bash
