@@ -56,6 +56,8 @@ As a contributor you can still run a test instance of the bot to confirm funcion
 
 To self-host, follow the Installation steps below — the only required variables are your Discord bot token and `CONTRIB_INSTANCE=1`.
 
+For a ready-made Docker Compose setup (bot + YouTube PO-token provider) and instructions for providing browser cookies — strongly recommended so YouTube doesn't flag your instance with "Sign in to confirm you're not a bot" — see **[selfhost/README.md](selfhost/README.md)**.
+
 
 ### Prerequisites
 
@@ -96,6 +98,8 @@ To self-host, follow the Installation steps below — the only required variable
    ```
 
    For the discord token, you must create a new personal discord bot at https://discord.com/developers/applications and then copy its Token in the 'Bot' tab after clicking 'Reset'
+
+   **Enable the Message Content intent** — still in the 'Bot' tab, under *Privileged Gateway Intents*, toggle on **Message Content Intent**. The bot needs it to detect video links in chat (quickembeds) and `.embed` text commands. Without it the bot exits on startup with: `You have requested privileged intents that have not been enabled or approved`.
 
 6. **Run the bot:**
    ```bash
