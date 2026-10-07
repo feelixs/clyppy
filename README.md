@@ -107,6 +107,16 @@ For a ready-made Docker Compose setup (bot + YouTube PO-token provider) and inst
    Docker run clyppybot
    ```
 
+7. **Install your personal bot to your Discord server!**
+   Visit https://discord.com/developers/applications and select your newly created bot. 
+   Go to the 'Installation' tab and in the Guild Install section select the privileges: 
+      - bot
+      - Send Messages
+      - Attach Files
+      - Embed Links
+      - Send Messages in Threads
+   Or alternatively, just grant it the 'Administrator' privilege to ensure it doesn't have any permission errors when you run it.
+
 ### Project Structure
 
 ```
