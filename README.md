@@ -82,7 +82,13 @@ To self-host, follow the Installation steps below — the only required variable
 
 4. **Set up environment variables:**
 
-   Copy `.env.example` into a new `.env` file and fill in the required variables:
+   Copy `.env.example` into a new `.env` file 
+   ```bash
+   cp .env.example .env
+   ```
+
+   Open the newly created .env file and fill in the required variables:
+   
    ```bash
    CLYPP_TOKEN=your_discord_bot_token_here
    CONTRIB_INSTANCE=1
@@ -90,7 +96,7 @@ To self-host, follow the Installation steps below — the only required variable
 
    For the discord token, you must create a new personal discord bot at https://discord.com/developers/applications and then copy its Token in the 'Bot' tab after clicking 'Reset'
 
-5. **Run the bot:**
+6. **Run the bot:**
    ```bash
    Docker build -t clyppybot .
    Docker run clyppybot
