@@ -2,10 +2,11 @@ from interactions import (Permissions, Embed, Message, Button, ButtonStyle, Slas
                           TYPE_THREAD_CHANNEL, ActionRow, MessageFlags, errors)
 from interactions.api.events import MessageCreate
 
-from bot.errors import VideoTooLong, NoDuration, UnknownError, DefinitelyNoDuration, NSFWEmbed
+from bot.errors import VideoTooLong, NoDuration, UnknownError, DefinitelyNoDuration, NSFWEmbed, FileTooLargeForDiscord
 from bot.io import get_aiohttp_session, is_404, fetch_video_status, get_clip_info, subtract_tokens, push_interaction_error
 from bot.env import (DL_SERVER_ID, DOWNLOAD_THIS_WEBHOOK_ID, POSSIBLE_EMBED_BUTTONS, is_contrib_instance,
-                     log_api_bypass, LOGGER_WEBHOOK_ID, TOPGG_VOTE_LINK, TOPGG_REVIEW_LINK)
+                     log_api_bypass, LOGGER_WEBHOOK_ID, TOPGG_VOTE_LINK, TOPGG_REVIEW_LINK, CONTRIB_INSTANCE,
+                     discord_upload_limit)
 from bot.types import DownloadResponse, LocalFileInfo, GuildType, DiscordAttachmentId
 from bot.task_queue import QuickembedTask
 from bot.tools.converter import ffprobe_video_metadata
@@ -355,9 +356,11 @@ class AutoEmbedder:
 
     async def process_clip_link(
             self, clip: 'BaseClip',
-            clip_link: str, respond_to: Union[Message, SlashContext],
-            guild: GuildType, try_send_files = True,
-            extend_with_ai = False, platform=None
+            clip_link: str,
+            respond_to: Union[Message, SlashContext],
+            guild: GuildType,
+            try_send_files = True,
+            platform=None
     ) -> None:
         # platform: the BaseMisc that resolved this clip. /embed runs through the shared
         # 'base' embedder, so it MUST be passed explicitly — reading self.platform_tools
@@ -371,39 +374,26 @@ class AutoEmbedder:
                 respond_to=respond_to,
                 guild=guild,
                 try_send_files=try_send_files,
-                extend_with_ai=extend_with_ai,
                 platform=platform
             )
         except Exception as e:
             # this is where we refund the tokens
             username = respond_to.author.username or f"User_{respond_to.author.id}"
-            if extend_with_ai:
-                # video extension -> always 10 tokens cost
-                self.logger.info(f"The AI extend failed, so we should refund 10 VIP tokens to {username} <{respond_to.author.id}>")
-                asyncio.create_task(subtract_tokens(
-                    user=respond_to.author,
-                    amt=-10,
-                    clip_url=clip.url,
-                    reason="Token Refund",
-                    description=f"The AI extend failed for {clip.url}"
-                ))
-            else:
-                # normal embed
-                self.logger.info(f"The clip failed to embed, so we should refund {clip.tokens_used} VIP tokens to {username} <{respond_to.author.id}>")
-                asyncio.create_task(subtract_tokens(
-                    user=respond_to.author,
-                    amt=-1 * clip.tokens_used,
-                    clip_url=clip.url,
-                    reason="Token Refund",
-                    description=f"The embed failed for {clip.url}"
-                ))
+            self.logger.info(f"The clip failed to embed, so we should refund {clip.tokens_used} VIP tokens to {username} <{respond_to.author.id}>")
+            asyncio.create_task(subtract_tokens(
+                user=respond_to.author,
+                amt=-1 * clip.tokens_used,
+                clip_url=clip.url,
+                reason="Token Refund",
+                description=f"The embed failed for {clip.url}"
+            ))
             raise e
 
     async def _process_clip(
             self,
             clip: 'BaseClip', clip_link: str,
             respond_to: Union[Message, SlashContext], guild: GuildType,
-            try_send_files=True, extend_with_ai=False, platform=None):
+            try_send_files=True, platform=None):
         # resolve the platform once, up front — never read self.platform_tools later in
         # this coroutine (it's shared mutable state on the 'base' embedder, see
         # process_clip_link)
@@ -423,6 +413,10 @@ class AutoEmbedder:
             return None
         elif clip.clyppy_id is None:
             await clip.compute_clyppy_id()
+
+        if not guild.is_dm and getattr(respond_to, 'guild', None) is not None:
+            # boosted guilds raise the bot's upload cap (tier 2 = 50 MiB, tier 3 = 100 MiB)
+            clip.discord_filesize_limit = discord_upload_limit(respond_to.guild)
 
         if str(guild.id) == str(DL_SERVER_ID) and isinstance(respond_to, Message) and int(respond_to.author) == DOWNLOAD_THIS_WEBHOOK_ID:
             # if we're in video dl server -> StoredVideo obj for this clip probably already exists
@@ -455,19 +449,13 @@ class AutoEmbedder:
                 return None
         else:
             # proceed normally
-
-            if extend_with_ai:
-                # these should always be re-generated - even for duplicate video ids
-                video_doesnt_exist = True
-            else:
-                status = await fetch_video_status(clip.clyppy_id)
-                video_doesnt_exist = not status['exists']
+            status = await fetch_video_status(clip.clyppy_id)
+            video_doesnt_exist = not status['exists']
 
             if video_doesnt_exist:
                 response: DownloadResponse = await self.bot.tools.dl.download_clip(
                     clip=clip,
-                    can_send_files=will_send_files,
-                    extend_with_ai=extend_with_ai
+                    can_send_files=will_send_files
                 )
             else:
                 self.logger.info(f" {clip.clyppy_url} - Video already exists!")
@@ -500,12 +488,14 @@ class AutoEmbedder:
                     label=f"View On {platform_tools.platform_name}" if platform_tools.platform_name != "base" else "View Source",
                     url=clip.url if clip.share_url is None else clip.share_url
                 ))
-            if (btn_idx == 0 or btn_idx == 2) and platform_tools.platform_name.lower() not in INVALID_DL_PLATFORMS:
-                comp.append(Button(
-                    style=ButtonStyle.SECONDARY,
-                    label="Download",
-                    custom_id=f"embdl-{clip.clyppy_id}"
-                ))
+            # Download button removed — download pipeline will not work for self
+            # hosted clyppy bot instances (retired with /download 2026-10-04)
+            #if (btn_idx == 0 or btn_idx == 2) and platform_tools.platform_name.lower() not in INVALID_DL_PLATFORMS:
+            #    comp.append(Button(
+            #        style=ButtonStyle.SECONDARY,
+            #        label="Download",
+            #        custom_id=f"embdl-{clip.clyppy_id}"
+            #    ))
 
             if guild.is_dm:
                 chn = "{dm}"
@@ -541,6 +531,11 @@ class AutoEmbedder:
 
             thumb_url = None
             uploading_to_discord = response.can_be_discord_uploaded and has_file_perms
+            if CONTRIB_INSTANCE and not response.can_be_discord_uploaded and not response.remote_url:
+                # safety net: self-host/contrib instances can only send direct Discord
+                # uploads or direct provider/CDN links — a response with neither
+                # (would have needed clyppy.io hosting) can't be served
+                raise FileTooLargeForDiscord
             clip_webp = None
             local_video_path = None
             if response.remote_url is None and not uploading_to_discord and video_doesnt_exist:
@@ -647,7 +642,7 @@ class AutoEmbedder:
                 'uploaded_to_discord': uploading_to_discord,
                 'video_file_dur': response.duration,
                 'expires_at_timestamp': expires_at,
-                'is_extended': extend_with_ai,
+                'is_extended': False,
                 'broadcaster_username': response.broadcaster_username,
                 'video_uploader_username': response.video_uploader_username,
                 'user_is_bot':  respond_to.author.bot,
@@ -698,19 +693,25 @@ class AutoEmbedder:
                 # Check if it's a SlashContext (or MinimalContext with send method)
                 # the "embed_format" setting (user-facing name); internal name predates the rename
                 auto_delete_mode = self.bot.guild_settings.get_auto_delete(guild.id)
+                embed_url = clip.clyppy_url
+                if CONTRIB_INSTANCE and response.remote_url:
+                    # self-host/contrib: no clyppy.io embed pages — send the fixer-provider
+                    # or platform-CDN link directly; Discord follows the 302 and embeds
+                    # the mp4 natively, same as clyppy.io's redirect page would
+                    embed_url = response.remote_url
                 if isinstance(respond_to, SlashContext) or (hasattr(respond_to, 'send') and not hasattr(respond_to, 'reply')):
                     # slash command
                     if uploading_to_discord:
                         bot_message = await respond_to.send(file=response.local_file_path, components=comp)
                     else:
-                        bot_message = await respond_to.send(clip.clyppy_url, components=comp)
+                        bot_message = await respond_to.send(embed_url, components=comp)
                 elif auto_delete_mode == 'channel':
                     # embed_format "send in channel (do not reply)" — post the embed in the
                     # channel with no reply and no mention, leaving the parent message untouched
                     if uploading_to_discord:
                         bot_message = await respond_to.channel.send(file=response.local_file_path, components=comp)
                     else:
-                        bot_message = await respond_to.channel.send(clip.clyppy_url, components=comp)
+                        bot_message = await respond_to.channel.send(embed_url, components=comp)
                 else:
                     # message
                     msg_content = f'<@!{respond_to.author.id}> ' if auto_delete_mode == 'true' else ''
@@ -718,7 +719,7 @@ class AutoEmbedder:
                         if uploading_to_discord:
                             bot_message = await respond_to.reply(msg_content, file=response.local_file_path, components=comp)
                         else:
-                            bot_message = await respond_to.reply(f'{msg_content}{clip.clyppy_url}', components=comp)
+                            bot_message = await respond_to.reply(f'{msg_content}{embed_url}', components=comp)
                     except Exception as e:
                         self.logger.info(f"Error replying to message: {str(e)} - sending to channel instead")
                         auto_delete_mode = 'false'
@@ -731,7 +732,7 @@ class AutoEmbedder:
                             )
                         else:
                             bot_message = await respond_to.channel.send(
-                                content=f'<@!{respond_to.author.id}> {clip.clyppy_url}',
+                                content=f'<@!{respond_to.author.id}> {embed_url}',
                                 components=comp
                             )
 

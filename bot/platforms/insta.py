@@ -277,7 +277,7 @@ class InstagramClip(BaseClip):
             if os.path.exists(filename):
                 d = get_video_details(filename)
                 d.video_name = "Instagram Reel" if self._path == "reel" else "Instagram Post"
-                if is_discord_compatible(d.filesize) and can_send_files:
+                if is_discord_compatible(d.filesize, self.discord_filesize_limit) and can_send_files:
                     self.logger.info(f"{self.id} can be uploaded to discord...")
                     d.can_be_discord_uploaded = True
                 return d

@@ -470,7 +470,7 @@ class Base(Extension):
                 embed.add_field(name="Original Link", value=clip_info['embedded_url'])
             if clip_info.get('expiry_ts_str'):
                 embed.add_field(name="Expires", value=clip_info['expiry_ts_str'])
-        embed.add_field(name="Backup", value=f"https://clyppy.io/{clyppy_id}/backup")
+        # Backup field removed — /backup retired 2026-10-01
         await ctx.send(embed=embed)
 
     @component_callback(compile(r"dlbtn-delete-.*"))
@@ -486,7 +486,7 @@ class Base(Extension):
             self.logger.error(f"Failed to delete /download message: {e}")
             await ctx.send("Failed to delete the message.", ephemeral=True)
 
-    @component_callback(compile(r"embdl-.*"))
+    #@component_callback(compile(r"embdl-.*"))  # Download button retired 2026-10-04
     async def embed_download_button(self, ctx: ComponentContext):
         await ctx.defer(ephemeral=True)
         clyppy_id = ctx.custom_id.split("-", 1)[1]
@@ -936,7 +936,7 @@ class Base(Extension):
 
             buttons = ActionRow(
                 Button(style=ButtonStyle.LINK, label="Download", url=cdn_url),
-                Button(style=ButtonStyle.SUCCESS, label="Back it up", custom_id=f"dlbtn-backup-{ctx.author.id}-{clip.clyppy_id}"),
+                # "Back it up" button removed — /backup retired 2026-10-01
                 Button(style=ButtonStyle.SECONDARY, label="ⓘ Info", custom_id=f"dlbtn-info-{ctx.author.id}-{clip.clyppy_id}"),
                 Button(style=ButtonStyle.DANGER, label="X", custom_id=f"dlbtn-delete-{ctx.author.id}-{clip.clyppy_id}"),
             )
@@ -963,13 +963,14 @@ class Base(Extension):
             while ctx.author.id in self.bot.currently_embedding_users:
                 self.bot.currently_embedding_users.remove(ctx.author.id)
 
-    @slash_command(name="giphify", description="Convert a video to a GIF",
-                   options=[SlashCommandOption(
-                       name="url",
-                       description="The video URL to convert to GIF",
-                       required=True,
-                       type=OptionType.STRING)
-                   ])
+    # giphify command will not work for self hosted clyppy bot instances
+    #@slash_command(name="giphify", description="Convert a video to a GIF",
+    #               options=[SlashCommandOption(
+    #                   name="url",
+    #                   description="The video URL to convert to GIF",
+    #                   required=True,
+    #                   type=OptionType.STRING)
+    #               ])
     async def giphify(self, ctx: SlashContext, url: str):
         await ctx.defer()
         url = self._sanitize_url(url)
@@ -1009,20 +1010,21 @@ class Base(Extension):
 
         await self._run_download_pipeline(ctx, url, "gif", interaction_type='giphify')
 
-    @slash_command(name="download", description="Download and convert a video to a different format",
-                   options=[
-                       SlashCommandOption(
-                           name="url",
-                           description="The video URL to download",
-                           required=True,
-                           type=OptionType.STRING),
-                       SlashCommandOption(
-                           name="file_ext",
-                           description="Output format (defaults to server setting, then mp4)",
-                           required=False,
-                           type=OptionType.STRING,
-                           choices=_DOWNLOAD_FILETYPE_CHOICES)
-                   ])
+    # download command will not work for self hosted clyppy bot instances
+    #@slash_command(name="download", description="Download and convert a video to a different format",
+    #               options=[
+    #                   SlashCommandOption(
+    #                       name="url",
+    #                       description="The video URL to download",
+    #                       required=True,
+    #                       type=OptionType.STRING),
+    #                   SlashCommandOption(
+    #                       name="file_ext",
+    #                       description="Output format (defaults to server setting, then mp4)",
+    #                       required=False,
+    #                       type=OptionType.STRING,
+    #                       choices=_DOWNLOAD_FILETYPE_CHOICES)
+    #               ])
     async def download(self, ctx: SlashContext, url: str, file_ext: str = None):
         await ctx.defer()
 
@@ -1233,19 +1235,21 @@ class Base(Extension):
         ]
         await ctx.send(content="\n".join(msg_lines), components=buttons)
 
-    @slash_command(name="backup", description="Back up a clip so it never expires (costs VIP tokens monthly)",
-                   options=[SlashCommandOption(
-                       name="clip_id",
-                       description="The Clyppy clip ID (10 chars, found in clyppy.io URL or Info button)",
-                       required=True,
-                       type=OptionType.STRING)
-                   ])
+    # /backup retired 2026-10-01 — decorators commented out so nothing registers;
+    # bodies kept intact in case it comes back
+    #@slash_command(name="backup", description="Back up a clip so it never expires (costs VIP tokens monthly)",
+    #               options=[SlashCommandOption(
+    #                   name="clip_id",
+    #                   description="The Clyppy clip ID (10 chars, found in clyppy.io URL or Info button)",
+    #                   required=True,
+    #                   type=OptionType.STRING)
+    #               ])
     async def backup(self, ctx: SlashContext, clip_id: str):
         await ctx.defer(ephemeral=True)
         self.logger.info(f"@slash_command for /backup - {ctx.author.id} - {clip_id}")
         await self._run_backup_flow(ctx, clip_id)
 
-    @component_callback(compile(r"dlbtn-backup-.*"))
+    #@component_callback(compile(r"dlbtn-backup-.*"))  # /backup retired
     async def dl_backup_button(self, ctx: ComponentContext):
         parts = ctx.custom_id.split("-")  # dlbtn-backup-{user_id}-{clyppy_id}
         owner_id = int(parts[2])
@@ -1256,7 +1260,7 @@ class Base(Extension):
         await ctx.defer(ephemeral=True)
         await self._run_backup_flow(ctx, clip_id)
 
-    @component_callback(compile(r"bkbtn-confirm-(pub|anon)-.*"))
+    #@component_callback(compile(r"bkbtn-confirm-(pub|anon)-.*"))  # /backup retired
     async def backup_confirm_button(self, ctx: ComponentContext):
         parts = ctx.custom_id.split("-")  # bkbtn-confirm-pub-{user_id}-{clip_id}
         privacy = parts[2]  # "pub" or "anon"
@@ -1312,7 +1316,7 @@ class Base(Extension):
 
         await ctx.edit_origin(content="\n".join(lines), components=[])
 
-    @component_callback(compile(r"bkbtn-cancel-.*"))
+    #@component_callback(compile(r"bkbtn-cancel-.*"))  # /backup retired
     async def backup_cancel_button(self, ctx: ComponentContext):
         parts = ctx.custom_id.split("-")  # bkbtn-cancel-{user_id}-{clip_id}
         owner_id = int(parts[2])

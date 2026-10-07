@@ -31,18 +31,6 @@ class VideoLongerThanMaxLength(Exception):
         super().__init__(f"Video duration ({video_dur} seconds) exceeds maximum allowed length")
 
 
-class VideoTooLongForExtend(Exception):
-    def __init__(self, video_dur):
-        self.video_dur = video_dur
-        super().__init__(f"Video duration ({video_dur} seconds) exceeds maximum allowed length")
-
-
-class VideoTooShortForExtend(Exception):
-    def __init__(self, video_dur):
-        self.video_dur = video_dur
-        super().__init__(f"Video duration ({video_dur} seconds) is shorter than minimum needed length")
-
-
 class ExceptionHandled(Exception):
     pass
 
@@ -130,6 +118,12 @@ class IPBlockedError(Exception):
 
 class RateLimitedByPlatformError(Exception):
     """Raised when the platform returns HTTP 429 Too Many Requests"""
+    pass
+
+
+class FileTooLargeForDiscord(Exception):
+    """Self-host/contrib mode only: the file exceeds Discord's upload limit and
+    there is no clyppy.io CDN to fall back to, so the embed cannot proceed."""
     pass
 
 
@@ -265,6 +259,8 @@ def friendly_yt_dlp_error_message(exception: Exception) -> str | None:
         return "The uploader has region-locked that video, and it isn't available in my server's country — so I can't fetch it."
     if isinstance(exception, LoginRequiredError):
         return "That post appears to be private or login-required, so I can't fetch it."
+    if isinstance(exception, FileTooLargeForDiscord):
+        return "Clyppy can't upload this file to Discord since it's too large! Please try a smaller video so I can upload it to Discord."
     if isinstance(exception, DRMProtectedError):
         return "That site protects its videos with DRM (like Crunchyroll or Netflix), so they can't be downloaded or embedded."
     if isinstance(exception, LiveStreamNotSupported):
