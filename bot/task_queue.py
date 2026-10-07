@@ -323,7 +323,7 @@ async def process_slash_command_task(bot, task: SlashCommandTask):
                 url=task.clip_url,
                 platform=platform,
                 slug=slug,
-                extend_with_ai=task.extend_with_ai,
+                extend_with_ai=False,
                 already_deferred=True
             )
 

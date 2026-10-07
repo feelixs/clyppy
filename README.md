@@ -42,10 +42,19 @@ Make sure in your personal Discord settings you've enabled "Link Embeds" under C
 
 **What you CAN do:**
 
-As a contributor you can still run a test instance of the bot to confirm funcionality. Set the environment variable `CONTRIB_INSTANCE=1` in the Dockerfile before building. This variable will enable contributor mode, where the bot will log certain events instead of calling its external API. For example, instead of uploading a video to clyppy.io, it will send a log. What this means:
+As a contributor you can still run a test instance of the bot to confirm funcionality. Set the environment variable `CONTRIB_INSTANCE=1` in the Dockerfile before building. This variable will enable contributor mode, where the bot will log certain events instead of calling its external API. For example, instead of uploading a video to clyppy.io, it will send a log.
 
-- All **large videos** will not be processed by a contributor bot instance
-- All **small videos** (below 8mb) will be processed normally and uploaded to Discord.
+### 🏠 Self-Hosting
+
+`CONTRIB_INSTANCE=1` is also the **self-host mode**: a standalone instance that works entirely without the private clyppy.io infrastructure. In this mode:
+
+- **Videos are uploaded directly to Discord** when they fit Discord's bot upload limit (currently **20 MiB**).
+- **Redirect platforms (Instagram, TikTok, Twitter/X, etc.) still work at any size** — the bot sends the resolver/CDN link directly and Discord embeds the video natively, skipping the clyppy.io intermediary page.
+- **Non-redirect videos over the Discord limit are rejected with a friendly message** ("Clyppy can't upload this file to Discord since it's too large!") instead of being uploaded to a CDN.
+- **No clyppy.io links are ever sent** — there's no web server to serve them.
+- **VIP tokens, /backup, and clip analytics are unavailable** — all token checks are stubbed, so embeds are effectively free and unlimited (within the size limit).
+
+To self-host, follow the Installation steps below — the only required variables are your Discord bot token and `CONTRIB_INSTANCE=1`.
 
 
 ### Prerequisites

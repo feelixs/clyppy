@@ -295,7 +295,7 @@ async def main():
     Bot.load_extension('cogs.base')
     Bot.load_extension('cogs.vote_notifier')
     Bot.load_extension('cogs.low_token_notifier')
-    Bot.load_extension('cogs.backup_notifier')
+    # Bot.load_extension('cogs.backup_notifier')  # /backup retired 2026-10-01
     Bot.load_extension('cogs.heartbeat')
     await Bot.guild_settings.setup_db()
 

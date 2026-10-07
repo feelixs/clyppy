@@ -1,8 +1,7 @@
 from interactions import SlashContext, Message
 from bot.errors import VideoLongerThanMaxLength
 from bot.env import (CLYPPYIO_USER_AGENT, MAX_VIDEO_LEN_SEC, EMBED_W_TOKEN_MAX_LEN, EMBED_TOTAL_MAX_LENGTH,
-                     EMBED_TOKEN_COST, EMBED_TOKEN_GRACE_SEC, DL_SERVER_ID, AI_EXTEND_TOKENS_COST,
-                     is_contrib_instance, log_api_bypass)
+                     EMBED_TOKEN_COST, EMBED_TOKEN_GRACE_SEC, DL_SERVER_ID, is_contrib_instance, log_api_bypass)
 from typing import Tuple, Union
 from math import floor
 from os import getenv
@@ -266,23 +265,6 @@ def get_token_cost(video_dur):
     extra_duration = video_dur - first_paid_threshold
     blocks = floor(extra_duration / EMBED_W_TOKEN_MAX_LEN) + 1
     return EMBED_TOKEN_COST * blocks
-
-
-async def author_has_enough_tokens_for_ai_extend(msg, url: str):
-    # -> bool-> can extend video, int-> number of tokens used, int->current tokens after embed
-    user = msg.author
-    sub = await subtract_tokens(
-        user=user,
-        amt=AI_EXTEND_TOKENS_COST,
-        clip_url=url,
-        reason="AI Video Extend",
-        description=f"User requested an AI extended video for {url}"
-    )
-    if sub['success']:
-        if sub['user_success']:  # the user had enough tokens to subtract successfully
-            return True, AI_EXTEND_TOKENS_COST, sub['tokens']
-
-    return False, 0, None
 
 
 async def fetch_vote_ranking(user):
