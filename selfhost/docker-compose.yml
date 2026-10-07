@@ -1,0 +1,39 @@
+name: clyppy-selfhost
+
+# Self-hosted CLYPPY: the bot + a YouTube PO-token provider.
+#
+# Usage (from the repo root):
+#   cp .env.example .env     # fill in CLYPP_TOKEN, keep CONTRIB_INSTANCE=1
+#   docker compose -f selfhost/docker-compose.yml up -d --build
+#
+# Cookies (optional but strongly recommended for YouTube): see selfhost/README.md
+
+services:
+  # Generates YouTube "PO tokens" so yt-dlp survives YouTube's bot checks.
+  # The bgutil-ytdlp-pot-provider plugin (already in requirements.txt) looks
+  # for this server on 127.0.0.1:4416 — hence host networking on both services.
+  bgutil-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider
+    init: true
+    network_mode: host
+    restart: unless-stopped
+
+  bot:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    init: true
+    stop_grace_period: 5m
+    network_mode: host
+    volumes:
+      # persistent guild settings database
+      - ../data:/app/data
+      # optional: Netscape-format cookies for yt-dlp (see selfhost/README.md).
+      # Put your exported file at selfhost/cookies/cookies.txt — if the folder
+      # is empty the bot simply runs without cookies.
+      - ./cookies:/cookies:ro
+    environment:
+      - COOKIE_FILE=/cookies/cookies.txt
+    depends_on:
+      - bgutil-provider
+    restart: unless-stopped

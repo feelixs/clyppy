@@ -76,3 +76,7 @@ htmlcov/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+# Self-host: never commit real browser cookies
+selfhost/cookies/*
+!selfhost/cookies/.gitkeep
