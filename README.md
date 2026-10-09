@@ -59,6 +59,19 @@ To self-host, follow the Installation steps below — the only required variable
 For a ready-made Docker Compose setup (bot + YouTube PO-token provider) and instructions for providing browser cookies — strongly recommended so YouTube doesn't flag your instance with "Sign in to confirm you're not a bot" — see **[selfhost/README.md](selfhost/README.md)**.
 
 
+### 🤖 Setting up with Claude Code
+
+If you use [Claude Code](https://claude.com/claude-code) (or another coding agent),
+the easiest way to self-host is to clone the repo, open it, and ask:
+
+> read the claude-code-setup/ dir instructions so i can self-host this discord bot
+
+The [claude-code-setup/](claude-code-setup/README.md) directory contains
+agent-oriented setup instructions plus a debugging knowledge base (cookies,
+privileged intents, silent auto-embed causes, TikTok provider outages, etc.), so
+your agent can walk you through setup and troubleshoot issues for you. Prefer doing
+it by hand? Just follow the Installation steps below.
+
 ### Prerequisites
 
 - Python 3.12 or higher
@@ -114,6 +127,7 @@ For a ready-made Docker Compose setup (bot + YouTube PO-token provider) and inst
       - Send Messages
       - Attach Files
       - Embed Links
+      - Read Message History (required for auto-embeds — without it the bot silently ignores posted links)
       - Send Messages in Threads
    Or alternatively, just grant it the 'Administrator' privilege to ensure it doesn't have any permission errors when you run it.
 
