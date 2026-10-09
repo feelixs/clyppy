@@ -30,7 +30,9 @@ async def publish_interaction(interaction_data, apikey, logger, edit_id=None, ed
             "edit": edit_type is not None,
             "edit_type": edit_type
         })
-        return {"success": True, "id": "test_video_id"}
+        # realistic-shaped stub: _process_clip reads result['video_page_id'] after a
+        # publish — None means "keep the locally generated clyppy_id"
+        return {"success": True, "id": "test_video_id", "video_page_id": None}
 
     try:
         url = 'https://clyppy.io/api/publish/'

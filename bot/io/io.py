@@ -31,8 +31,9 @@ async def check_text_is_nsfw(text: str):
     url = f"https://clyppy.io/api/check-nsfw/?text={text}"
     if is_contrib_instance(logger):
         log_api_bypass(logger, url, "GET", {})
+        return False  # missing return previously meant contrib instances hit the real API
     async with get_aiohttp_session() as session:
-        async with session.get(url) as response:
+        async with session.get(url, headers={'X-API-Key': safe_get_post_key()}) as response:
             if response.status >= 500:
                 logger.warning(f"[CHECK-TEXT-NSFW] Server error {response.status}. API may be down. Error was: {text}")
                 return False
@@ -224,7 +225,9 @@ async def refresh_clip(clip_id: str, user_id: int):
     head = {
         'X-Discord-User-Id': str(user_id),
         'Not-Encoded': 'true',
-        'Ignore-User-Check': 'true'
+        # the server only honors Ignore-User-Check when the API key is valid
+        'Ignore-User-Check': 'true',
+        'X-API-Key': safe_get_post_key(),
     }
     async with get_aiohttp_session() as session:
         async with session.post(url, headers=head) as response:
@@ -239,7 +242,8 @@ async def author_has_premium(user):
 
     url = f"https://clyppy.io/api/users/has-premium"
     head = {
-        'X-Discord-User-Id': str(user.id)
+        'X-Discord-User-Id': str(user.id),
+        'X-API-Key': safe_get_post_key(),
     }
     async with get_aiohttp_session() as session:
         async with session.post(url, headers=head) as response:

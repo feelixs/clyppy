@@ -1749,7 +1749,6 @@ class BaseAutoEmbed:
             slug=slug,
             platform_name=p,
             guild=guild,
-            extend_with_ai=False
         ))
         done, pending = await asyncio.wait(
             [main_task, timeout_task],
