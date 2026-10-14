@@ -56,6 +56,8 @@ As a contributor you can still run a test instance of the bot to confirm funcion
 
 To self-host, follow the Installation steps below — the only required variables are your Discord bot token and `CONTRIB_INSTANCE=1`.
 
+### Installation
+
 For a ready-made Docker Compose setup (bot + YouTube PO-token provider) and instructions for providing browser cookies — strongly recommended so YouTube doesn't flag your instance with "Sign in to confirm you're not a bot" — see **[selfhost/README.md](selfhost/README.md)**.
 
 
@@ -79,7 +81,7 @@ it by hand? Just follow the Installation steps below.
 - Discord Bot Token (for testing)
 - Git
 
-### Installation
+### Manual Installation Steps
 
 1. **Clone the repository:**
    ```bash
